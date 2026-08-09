@@ -10,4 +10,5 @@ public class RabbitMqOptions
     public string ExchangeName { get; set; } = "timelens.jobs";
     public string QueueName { get; set; } = "timelens.ingestion.jobs";
     public string ValidationQueueName { get; set; } = "timelens.validation.jobs";
+    public string MarketDataUpdatesQueueName { get; set; } = "timelens.market-data.updates";
 }

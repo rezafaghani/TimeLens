@@ -12,17 +12,17 @@ public class IngestionControlRepository(TimeLensContext context) : IIngestionCon
         return await QuerySchedulesAsync("WHERE enabled = true", [], cancellationToken);
     }
 
-    public async Task<List<IngestionSchedule>> GetSchedulesAsync(string? curveId = null, CancellationToken cancellationToken = default)
+    public async Task<List<IngestionSchedule>> GetSchedulesAsync(string? seriesId = null, CancellationToken cancellationToken = default)
     {
         var parameters = new List<NpgsqlParameter>();
         var where = "";
-        if (!string.IsNullOrWhiteSpace(curveId))
+        if (!string.IsNullOrWhiteSpace(seriesId))
         {
-            where = "WHERE curve_id = @curve_id";
-            parameters.Add(new NpgsqlParameter("curve_id", curveId));
+            where = "WHERE series_id = @series_id";
+            parameters.Add(new NpgsqlParameter("series_id", seriesId));
         }
 
-        return await QuerySchedulesAsync($"{where} ORDER BY curve_id", parameters, cancellationToken);
+        return await QuerySchedulesAsync($"{where} ORDER BY series_id", parameters, cancellationToken);
     }
 
     public async Task<IngestionSchedule?> GetScheduleAsync(string id, CancellationToken cancellationToken = default)
@@ -31,11 +31,11 @@ public class IngestionControlRepository(TimeLensContext context) : IIngestionCon
         return schedules.FirstOrDefault();
     }
 
-    public async Task<List<IngestionJob>> GetJobsAsync(string? scheduleId, string? curveId, CancellationToken cancellationToken = default)
+    public async Task<List<IngestionJob>> GetJobsAsync(string? scheduleId, string? seriesId, CancellationToken cancellationToken = default)
     {
-        var (where, parameters) = BuildWhere(("schedule_id", scheduleId), ("curve_id", curveId));
+        var (where, parameters) = BuildWhere(("schedule_id", scheduleId), ("series_id", seriesId));
         var sql = $"""
-            SELECT id, schedule_id, curve_id, status, queued_at, started_at, finished_at, error
+            SELECT id, schedule_id, series_id, status, queued_at, started_at, finished_at, error
             FROM ingestion_jobs
             {where}
             ORDER BY queued_at DESC
@@ -53,7 +53,7 @@ public class IngestionControlRepository(TimeLensContext context) : IIngestionCon
             {
                 Id = reader.GetString(0),
                 ScheduleId = reader.GetString(1),
-                CurveId = reader.GetString(2),
+                SeriesId = reader.GetString(2),
                 Status = reader.GetString(3),
                 QueuedAt = reader.GetFieldValue<DateTimeOffset>(4),
                 StartedAt = reader.IsDBNull(5) ? null : reader.GetFieldValue<DateTimeOffset>(5),
@@ -65,11 +65,11 @@ public class IngestionControlRepository(TimeLensContext context) : IIngestionCon
         return jobs;
     }
 
-    public async Task<List<IngestionExecution>> GetExecutionsAsync(string? jobId, string? scheduleId, string? curveId, CancellationToken cancellationToken = default)
+    public async Task<List<IngestionExecution>> GetExecutionsAsync(string? jobId, string? scheduleId, string? seriesId, CancellationToken cancellationToken = default)
     {
-        var (where, parameters) = BuildWhere(("job_id", jobId), ("schedule_id", scheduleId), ("curve_id", curveId));
+        var (where, parameters) = BuildWhere(("job_id", jobId), ("schedule_id", scheduleId), ("series_id", seriesId));
         var sql = $"""
-            SELECT id, job_id, schedule_id, curve_id, status, created_at, started_at, finished_at, inserted, skipped, error
+            SELECT id, job_id, schedule_id, series_id, status, created_at, started_at, finished_at, inserted, skipped, error
             FROM ingestion_executions
             {where}
             ORDER BY created_at DESC
@@ -88,7 +88,7 @@ public class IngestionControlRepository(TimeLensContext context) : IIngestionCon
                 Id = reader.GetString(0),
                 JobId = reader.GetString(1),
                 ScheduleId = reader.GetString(2),
-                CurveId = reader.GetString(3),
+                SeriesId = reader.GetString(3),
                 Status = reader.GetString(4),
                 CreatedAt = reader.GetFieldValue<DateTimeOffset>(5),
                 StartedAt = reader.IsDBNull(6) ? null : reader.GetFieldValue<DateTimeOffset>(6),
@@ -108,15 +108,15 @@ public class IngestionControlRepository(TimeLensContext context) : IIngestionCon
         {
             await using var command = context.Postgres.CreateCommand("""
                 INSERT INTO ingestion_schedules (
-                    id, curve_id, name, cron_expression, default_cron_expression, enabled, source, endpoint, parameters,
+                    id, series_id, name, cron_expression, default_cron_expression, enabled, source, endpoint, parameters,
                     lookback_hours, window_start_expression, window_end_expression, default_window_start_expression,
                     default_window_end_expression, batch_size, last_queued_at, created_at, updated_at)
                 VALUES (
-                    @id, @curve_id, @name, @cron_expression, @default_cron_expression, @enabled, @source, @endpoint, @parameters,
+                    @id, @series_id, @name, @cron_expression, @default_cron_expression, @enabled, @source, @endpoint, @parameters,
                     @lookback_hours, @window_start_expression, @window_end_expression, @default_window_start_expression,
                     @default_window_end_expression, @batch_size, @last_queued_at, @created_at, @updated_at)
                 ON CONFLICT (id) DO UPDATE SET
-                    curve_id = EXCLUDED.curve_id,
+                    series_id = EXCLUDED.series_id,
                     name = EXCLUDED.name,
                     cron_expression = CASE WHEN ingestion_schedules.cron_expression = '* * * * *' THEN EXCLUDED.cron_expression ELSE ingestion_schedules.cron_expression END,
                     default_cron_expression = EXCLUDED.default_cron_expression,
@@ -146,11 +146,11 @@ public class IngestionControlRepository(TimeLensContext context) : IIngestionCon
 
         await using var command = context.Postgres.CreateCommand("""
             INSERT INTO ingestion_schedules (
-                id, curve_id, name, cron_expression, default_cron_expression, enabled, source, endpoint, parameters,
+                id, series_id, name, cron_expression, default_cron_expression, enabled, source, endpoint, parameters,
                 lookback_hours, window_start_expression, window_end_expression, default_window_start_expression,
                 default_window_end_expression, batch_size, last_queued_at, created_at, updated_at)
             VALUES (
-                @id, @curve_id, @name, @cron_expression, @default_cron_expression, @enabled, @source, @endpoint, @parameters,
+                @id, @series_id, @name, @cron_expression, @default_cron_expression, @enabled, @source, @endpoint, @parameters,
                 @lookback_hours, @window_start_expression, @window_end_expression, @default_window_start_expression,
                 @default_window_end_expression, @batch_size, @last_queued_at, @created_at, @updated_at)
             """);
@@ -228,7 +228,7 @@ public class IngestionControlRepository(TimeLensContext context) : IIngestionCon
         {
             Id = Guid.NewGuid().ToString("N"),
             ScheduleId = schedule.Id,
-            CurveId = schedule.CurveId,
+            SeriesId = schedule.SeriesId,
             Status = IngestionStatuses.Queued,
             QueuedAt = queuedAt
         };
@@ -237,7 +237,7 @@ public class IngestionControlRepository(TimeLensContext context) : IIngestionCon
             Id = Guid.NewGuid().ToString("N"),
             JobId = job.Id,
             ScheduleId = schedule.Id,
-            CurveId = schedule.CurveId,
+            SeriesId = schedule.SeriesId,
             Status = IngestionStatuses.Queued,
             CreatedAt = queuedAt
         };
@@ -251,7 +251,7 @@ public class IngestionControlRepository(TimeLensContext context) : IIngestionCon
             ScheduleId = schedule.Id,
             JobId = job.Id,
             ExecutionId = execution.Id,
-            CurveId = schedule.CurveId,
+            SeriesId = schedule.SeriesId,
             Source = schedule.Source,
             Endpoint = schedule.Endpoint,
             Parameters = schedule.Parameters,
@@ -280,7 +280,7 @@ public class IngestionControlRepository(TimeLensContext context) : IIngestionCon
         {
             Id = Guid.NewGuid().ToString("N"),
             ScheduleId = schedule.Id,
-            CurveId = schedule.CurveId,
+            SeriesId = schedule.SeriesId,
             Status = IngestionStatuses.Queued,
             QueuedAt = queuedAt
         };
@@ -289,7 +289,7 @@ public class IngestionControlRepository(TimeLensContext context) : IIngestionCon
             Id = Guid.NewGuid().ToString("N"),
             JobId = job.Id,
             ScheduleId = schedule.Id,
-            CurveId = schedule.CurveId,
+            SeriesId = schedule.SeriesId,
             Status = IngestionStatuses.Queued,
             CreatedAt = queuedAt
         };
@@ -303,7 +303,7 @@ public class IngestionControlRepository(TimeLensContext context) : IIngestionCon
             ScheduleId = schedule.Id,
             JobId = job.Id,
             ExecutionId = execution.Id,
-            CurveId = schedule.CurveId,
+            SeriesId = schedule.SeriesId,
             Source = source,
             Endpoint = endpoint,
             Parameters = parameters,
@@ -346,7 +346,7 @@ public class IngestionControlRepository(TimeLensContext context) : IIngestionCon
     private async Task<List<IngestionSchedule>> QuerySchedulesAsync(string suffix, List<NpgsqlParameter> parameters, CancellationToken cancellationToken)
     {
         var sql = $"""
-            SELECT id, curve_id, name, cron_expression, enabled, source, endpoint, parameters,
+            SELECT id, series_id, name, cron_expression, enabled, source, endpoint, parameters,
                    lookback_hours, batch_size, last_queued_at, created_at, updated_at,
                    default_cron_expression, window_start_expression, window_end_expression,
                    default_window_start_expression, default_window_end_expression
@@ -364,7 +364,7 @@ public class IngestionControlRepository(TimeLensContext context) : IIngestionCon
             schedules.Add(new IngestionSchedule
             {
                 Id = reader.GetString(0),
-                CurveId = reader.GetString(1),
+                SeriesId = reader.GetString(1),
                 Name = reader.GetString(2),
                 CronExpression = reader.GetString(3),
                 Enabled = reader.GetBoolean(4),
@@ -409,7 +409,7 @@ public class IngestionControlRepository(TimeLensContext context) : IIngestionCon
     private static void AddScheduleParameters(NpgsqlCommand command, IngestionSchedule schedule)
     {
         command.Parameters.AddWithValue("id", schedule.Id);
-        command.Parameters.AddWithValue("curve_id", schedule.CurveId);
+        command.Parameters.AddWithValue("series_id", schedule.SeriesId);
         command.Parameters.AddWithValue("name", schedule.Name);
         command.Parameters.AddWithValue("cron_expression", schedule.CronExpression);
         command.Parameters.AddWithValue("default_cron_expression", string.IsNullOrWhiteSpace(schedule.DefaultCronExpression) ? schedule.CronExpression : schedule.DefaultCronExpression);
@@ -433,15 +433,15 @@ public class IngestionControlRepository(TimeLensContext context) : IIngestionCon
         await using var command = context.Postgres.CreateCommand("""
             SELECT EXISTS (
                 SELECT 1
-                FROM energy_datasets
-                WHERE curve_id = @curve_id
-                  AND source = @source
+                FROM market_data_series
+                WHERE series_id = @series_id
+                  AND provider = @source
                   AND endpoint = @endpoint
                   AND deprecated = false
                   AND request_parameters @> @parameters
             )
             """);
-        command.Parameters.AddWithValue("curve_id", schedule.CurveId);
+        command.Parameters.AddWithValue("series_id", schedule.SeriesId);
         command.Parameters.AddWithValue("source", schedule.Source);
         command.Parameters.AddWithValue("endpoint", schedule.Endpoint.TrimStart('/'));
         command.Parameters.Add(new NpgsqlParameter("parameters", NpgsqlDbType.Jsonb) { Value = JsonSerializer.Serialize(schedule.Parameters) });
@@ -452,12 +452,12 @@ public class IngestionControlRepository(TimeLensContext context) : IIngestionCon
     private static async Task InsertJobAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, IngestionJob job, CancellationToken cancellationToken)
     {
         await using var command = new NpgsqlCommand("""
-            INSERT INTO ingestion_jobs (id, schedule_id, curve_id, status, queued_at, started_at, finished_at, error)
-            VALUES (@id, @schedule_id, @curve_id, @status, @queued_at, @started_at, @finished_at, @error)
+            INSERT INTO ingestion_jobs (id, schedule_id, series_id, status, queued_at, started_at, finished_at, error)
+            VALUES (@id, @schedule_id, @series_id, @status, @queued_at, @started_at, @finished_at, @error)
             """, connection, transaction);
         command.Parameters.AddWithValue("id", job.Id);
         command.Parameters.AddWithValue("schedule_id", job.ScheduleId);
-        command.Parameters.AddWithValue("curve_id", job.CurveId);
+        command.Parameters.AddWithValue("series_id", job.SeriesId);
         command.Parameters.AddWithValue("status", job.Status);
         command.Parameters.AddWithValue("queued_at", job.QueuedAt);
         command.Parameters.AddWithValue("started_at", DbValue.From(job.StartedAt));
@@ -469,13 +469,13 @@ public class IngestionControlRepository(TimeLensContext context) : IIngestionCon
     private static async Task InsertExecutionAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, IngestionExecution execution, CancellationToken cancellationToken)
     {
         await using var command = new NpgsqlCommand("""
-            INSERT INTO ingestion_executions (id, job_id, schedule_id, curve_id, status, created_at, started_at, finished_at, inserted, skipped, error)
-            VALUES (@id, @job_id, @schedule_id, @curve_id, @status, @created_at, @started_at, @finished_at, @inserted, @skipped, @error)
+            INSERT INTO ingestion_executions (id, job_id, schedule_id, series_id, status, created_at, started_at, finished_at, inserted, skipped, error)
+            VALUES (@id, @job_id, @schedule_id, @series_id, @status, @created_at, @started_at, @finished_at, @inserted, @skipped, @error)
             """, connection, transaction);
         command.Parameters.AddWithValue("id", execution.Id);
         command.Parameters.AddWithValue("job_id", execution.JobId);
         command.Parameters.AddWithValue("schedule_id", execution.ScheduleId);
-        command.Parameters.AddWithValue("curve_id", execution.CurveId);
+        command.Parameters.AddWithValue("series_id", execution.SeriesId);
         command.Parameters.AddWithValue("status", execution.Status);
         command.Parameters.AddWithValue("created_at", execution.CreatedAt);
         command.Parameters.AddWithValue("started_at", DbValue.From(execution.StartedAt));

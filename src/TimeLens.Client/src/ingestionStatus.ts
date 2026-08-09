@@ -1,6 +1,6 @@
 export interface IngestionSchedule {
   id: string;
-  curveId: string;
+  seriesId: string;
   name: string;
   cronExpression: string;
   defaultCronExpression: string;
@@ -21,7 +21,7 @@ export interface IngestionSchedule {
 export interface IngestionJob {
   id: string;
   scheduleId: string;
-  curveId: string;
+  seriesId: string;
   status: string;
   queuedAt: string;
   startedAt?: string | null;
@@ -33,7 +33,7 @@ export interface IngestionExecution {
   id: string;
   jobId: string;
   scheduleId: string;
-  curveId: string;
+  seriesId: string;
   status: string;
   createdAt: string;
   startedAt?: string | null;
@@ -90,7 +90,7 @@ export function buildScheduleStatusRows(
 
     return {
       id: schedule.id,
-      name: schedule.name || schedule.curveId,
+      name: schedule.name || schedule.seriesId,
       detail: `${schedule.source} · ${schedule.endpoint} · ${schedule.cronExpression} · ${schedule.windowStartExpression} -> ${schedule.windowEndExpression}`,
       enabled: schedule.enabled,
       scheduleStatus: schedule.enabled ? 'enabled' : 'disabled',
@@ -124,6 +124,9 @@ export function buildScheduleJobHistoryRows(scheduleId: string, jobs: IngestionJ
 
 export function suggestCronFromGranularity(granularity: string) {
   const value = granularity.toLowerCase().replace(/\s+/g, '');
+  if (value === '1m') return '*/1 * * * *';
+  if (value === '5m') return '*/5 * * * *';
+  if (value === '15m') return '*/15 * * * *';
   const minuteMatch = value.match(/^(\d+)(min|minute|minutes)$/);
   if (minuteMatch) {
     const minutes = Math.max(Number(minuteMatch[1]), 1);

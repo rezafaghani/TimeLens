@@ -18,13 +18,14 @@ builder.Services.AddSingleton<TimeLensContext>(sp =>
 });
 builder.Services.AddScoped<IIngestionControlRepository, IngestionControlRepository>();
 builder.Services.AddScoped<IDatasetRepository, DatasetRepository>();
-builder.Services.AddHttpClient<EnergyChartsClient>(client =>
+builder.Services.AddHttpClient<CoinbaseCandleClient>(client =>
 {
-    client.BaseAddress = new Uri(builder.Configuration["EnergyCharts:BaseUrl"] ?? "https://api.energy-charts.info/");
+    client.BaseAddress = new Uri(builder.Configuration["Coinbase:BaseUrl"] ?? "https://api.exchange.coinbase.com/");
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("TimeLens/1.0");
 });
-builder.Services.AddSingleton<EnergyChartsRateLimiter>();
+builder.Services.AddSingleton<ProviderRateLimiter>();
 builder.Services.AddHttpClient<OAuthTokenProvider>();
-builder.Services.AddSingleton<EnergyChartsNormalizer>();
+builder.Services.AddSingleton<CoinbaseCandleNormalizer>();
 builder.Services.AddScoped<IngestionWriteClient>();
 var grpcClientBuilder = builder.Services.AddGrpcClient<IngestionWrite.IngestionWriteClient>(options =>
 {

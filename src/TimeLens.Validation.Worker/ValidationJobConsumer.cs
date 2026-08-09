@@ -164,7 +164,7 @@ public class ValidationJobConsumer(
             }
             else if (target.TargetType == "group")
             {
-                var members = await qualityRepository.GetCurveGroupMembersAsync(target.TargetId, cancellationToken);
+                var members = await qualityRepository.GetSeriesGroupMembersAsync(target.TargetId, cancellationToken);
                 ids.AddRange(members.Select(x => x.DatasetId));
             }
         }

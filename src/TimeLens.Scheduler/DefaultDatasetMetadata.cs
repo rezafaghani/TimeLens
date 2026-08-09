@@ -9,48 +9,30 @@ public static class DefaultDatasetMetadata
     {
         foreach (var schedule in schedules)
         {
+            var productId = Parameter(schedule, "product_id");
+            var parts = productId.Split('-', 2, StringSplitOptions.RemoveEmptyEntries);
+            var quoteAsset = parts.ElementAtOrDefault(1) ?? string.Empty;
             yield return new DatasetMetadataDto
             {
-                CurveId = schedule.CurveId,
-                Source = schedule.Source,
-                Endpoint = schedule.Endpoint.Trim('/'),
-                Metric = Metric(schedule),
-                DataKind = DataKind(schedule.Endpoint),
-                Category = Category(schedule.Endpoint),
-                Country = Parameter(schedule, "country"),
-                BiddingZone = Parameter(schedule, "bzn"),
-                Region = Parameter(schedule, "region"),
-                Granularity = "unknown",
-                ProductionType = Parameter(schedule, "production_type"),
-                ForecastType = Parameter(schedule, "forecast_type"),
+                SeriesId = schedule.SeriesId,
+                Provider = schedule.Source,
+                Exchange = "Coinbase",
+                Symbol = productId,
+                AssetClass = "Crypto",
+                BaseAsset = parts.ElementAtOrDefault(0) ?? string.Empty,
+                QuoteAsset = quoteAsset,
+                Currency = quoteAsset,
+                MarketDataType = "ohlcv",
+                Timeframe = Parameter(schedule, "timeframe"),
+                TimeZone = "UTC",
+                Calendar = "crypto-24x7",
+                ProviderInstrumentId = productId,
+                Endpoint = schedule.Endpoint,
+                Unit = quoteAsset,
                 RequestParameters = new Dictionary<string, string>(schedule.Parameters)
             };
         }
     }
-
-    private static string Metric(IngestionSchedule schedule) =>
-        schedule.Endpoint.Trim('/') == "public_power_forecast"
-            ? "forecast"
-            : schedule.Endpoint.Trim('/');
-
-    private static string DataKind(string endpoint) => endpoint switch
-    {
-        "/public_power_forecast" or "/cbet" or "/cbpf" or "/signal" or "/ren_share_forecast" => "forecast",
-        "/installed_power" => "reference",
-        _ => "actual"
-    };
-
-    private static string Category(string endpoint) => endpoint switch
-    {
-        "/public_power" or "/total_power" or "/public_power_forecast" => "power",
-        "/installed_power" => "capacity",
-        "/price" => "price",
-        "/cbet" or "/cbpf" => "exchange",
-        "/frequency" => "frequency",
-        "/signal" => "signal",
-        _ when endpoint.Contains("share", StringComparison.OrdinalIgnoreCase) => "share",
-        _ => "unknown"
-    };
 
     private static string Parameter(IngestionSchedule schedule, string key) =>
         schedule.Parameters.TryGetValue(key, out var value) ? value : string.Empty;

@@ -25,10 +25,6 @@ internal static class Extensions
             var clickHouse = configuration.GetConnectionString("ClickHouse") ?? throw new InvalidOperationException("ClickHouse connection string is not configured.");
             return new TimeLensContext(postgres, clickHouse);
         });
-        services.AddScoped<IRenewableAssetRepository, RenewableAssetRepository>();
-        services.AddScoped<IWindTurbineRepository, WindTurbineRepository>();
-        services.AddScoped<ISolarPanelRepository, SolarPanelRepository>();
-        services.AddScoped<IProductionRepository, ProductionRepository>();
         services.AddScoped<IDatasetRepository, DatasetRepository>();
         services.AddScoped<ITimeSeriesRepository, TimeSeriesRepository>();
         services.AddScoped<IIngestionControlRepository, IngestionControlRepository>();
@@ -43,7 +39,7 @@ internal static class Extensions
         services.AddScoped<ExecutionRuntime>();
         services.AddSingleton<RabbitMqJobPublisher>();
         services.AddSingleton<IValidationJobPublisher>(sp => sp.GetRequiredService<RabbitMqJobPublisher>());
-        services.AddSingleton<ICacheService, CacheService>();
+        services.AddHostedService<MarketDataUpdateConsumer>();
         services.AddMemoryCache();
     }
 }

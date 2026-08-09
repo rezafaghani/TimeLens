@@ -5,10 +5,10 @@ namespace TimeLens.Domain.Interfaces;
 public interface IIngestionControlRepository
 {
     Task<List<IngestionSchedule>> GetEnabledSchedulesAsync(CancellationToken cancellationToken = default);
-    Task<List<IngestionSchedule>> GetSchedulesAsync(string? curveId = null, CancellationToken cancellationToken = default);
+    Task<List<IngestionSchedule>> GetSchedulesAsync(string? seriesId = null, CancellationToken cancellationToken = default);
     Task<IngestionSchedule?> GetScheduleAsync(string id, CancellationToken cancellationToken = default);
-    Task<List<IngestionJob>> GetJobsAsync(string? scheduleId, string? curveId, CancellationToken cancellationToken = default);
-    Task<List<IngestionExecution>> GetExecutionsAsync(string? jobId, string? scheduleId, string? curveId, CancellationToken cancellationToken = default);
+    Task<List<IngestionJob>> GetJobsAsync(string? scheduleId, string? seriesId, CancellationToken cancellationToken = default);
+    Task<List<IngestionExecution>> GetExecutionsAsync(string? jobId, string? scheduleId, string? seriesId, CancellationToken cancellationToken = default);
     Task EnsureDefaultSchedulesAsync(IEnumerable<IngestionSchedule> schedules, CancellationToken cancellationToken = default);
     Task<IngestionSchedule> CreateScheduleAsync(IngestionSchedule schedule, CancellationToken cancellationToken = default);
     Task<IngestionSchedule?> UpdateScheduleAsync(IngestionSchedule schedule, CancellationToken cancellationToken = default);

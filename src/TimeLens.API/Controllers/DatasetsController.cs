@@ -13,29 +13,31 @@ public class DatasetsController(
     [ProducesResponseType(typeof(List<DatasetMetadataDto>), StatusCodes.Status200OK)]
     public async Task<IActionResult> Search(
         [FromQuery] string? search,
-        [FromQuery] string? curveId,
+        [FromQuery] string? seriesId,
+        [FromQuery] string? provider,
+        [FromQuery] string? exchange,
+        [FromQuery] string? symbol,
+        [FromQuery] string? assetClass,
+        [FromQuery] string? baseAsset,
+        [FromQuery] string? quoteAsset,
+        [FromQuery] string? marketDataType,
+        [FromQuery] string? timeframe,
         [FromQuery] string? endpoint,
-        [FromQuery] string? metric,
-        [FromQuery] string? dataKind,
-        [FromQuery] string? category,
-        [FromQuery] string? country,
-        [FromQuery] string? biddingZone,
-        [FromQuery] string? region,
-        [FromQuery] string? granularity,
         CancellationToken cancellationToken)
     {
         var datasets = await datasetRepository.SearchAsync(new DatasetSearchFilter
         {
             Search = search,
-            CurveId = curveId,
+            SeriesId = seriesId,
+            Provider = provider,
+            Exchange = exchange,
+            Symbol = symbol,
+            AssetClass = assetClass,
+            BaseAsset = baseAsset,
+            QuoteAsset = quoteAsset,
+            MarketDataType = marketDataType,
+            Timeframe = timeframe,
             Endpoint = endpoint,
-            Metric = metric,
-            DataKind = dataKind,
-            Category = category,
-            Country = country,
-            BiddingZone = biddingZone,
-            Region = region,
-            Granularity = granularity
         }, cancellationToken);
 
         return Ok(datasets);

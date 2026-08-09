@@ -46,10 +46,10 @@ public class Worker(
                 }
 
                 await publisher.PublishAsync(message, cancellationToken);
-                logger.LogInformation("Queued ingestion job {JobId} for schedule {ScheduleId} and curve {CurveId}.",
+                logger.LogInformation("Queued ingestion job {JobId} for schedule {ScheduleId} and series {SeriesId}.",
                     message.JobId,
                     message.ScheduleId,
-                    message.CurveId);
+                    message.SeriesId);
             }
             catch (Exception ex)
             {

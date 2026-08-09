@@ -1,4 +1,5 @@
 using Scalar.AspNetCore;
+using TimeLens.API.Hubs;
 var  myAllowSpecificOrigins = "_myAllowSpecificOrigins";
 var builder = WebApplication.CreateBuilder(args);
 
@@ -18,10 +19,12 @@ builder.Services.AddCors(options =>
         {
             policy.WithOrigins("http://127.0.0.1:5173", "http://localhost:5173")
                 .AllowAnyHeader()
-                .AllowAnyMethod();
+                .AllowAnyMethod()
+                .AllowCredentials();
         });
 });
 builder.Services.AddControllers();
+builder.Services.AddSignalR();
 var app = builder.Build();
 
 // Perform database initialization
@@ -41,6 +44,7 @@ app.UseExceptionHandler();
 app.UseAuthorization();
 
 app.MapControllers();
+app.MapHub<MarketDataHub>("/hubs/market-data");
 
 
 

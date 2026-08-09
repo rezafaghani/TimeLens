@@ -25,7 +25,7 @@ public class ValidationExecutionService(
             return null;
         }
 
-        if (!ExecutionPluginConfiguration.TryParseDuration(request?.Granularity ?? metadata.Granularity, out var granularity)
+        if (!ExecutionPluginConfiguration.TryParseDuration(request?.Granularity ?? QualityValidationEngine.ToIsoDuration(metadata.Timeframe), out var granularity)
             || !TryParseOptionalDuration(request?.AllowedDelay, out var allowedDelay))
         {
             throw new ArgumentException("Granularity and allowedDelay must be ISO-8601 durations, for example PT15M.");

@@ -379,6 +379,186 @@ select:hover {
   padding: var(--space-3);
 }
 
+.market-chart-zone {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.chart-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.chart-toolbar h2,
+.chart-toolbar p {
+  margin: 0;
+}
+
+.chart-toolbar p {
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.chart-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.segmented-control {
+  display: inline-flex;
+  gap: var(--space-1);
+  padding: 2px;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  background: var(--panel-muted);
+}
+
+.segmented-control button {
+  min-height: 1.9rem;
+  padding: 0.3rem 0.55rem;
+}
+
+.segmented-control button.active {
+  background: var(--primary);
+  color: white;
+}
+
+.chart-wrap {
+  position: relative;
+  min-height: 440px;
+}
+
+.market-chart {
+  height: 440px;
+}
+
+.chart-tooltip-panel {
+  position: absolute;
+  top: var(--space-3);
+  left: var(--space-3);
+  z-index: 3;
+  display: grid;
+  gap: 0.12rem;
+  min-width: 160px;
+  border: 1px solid #243447;
+  border-radius: 6px;
+  background: rgb(24 32 42 / 94%);
+  color: white;
+  padding: var(--space-2);
+  pointer-events: none;
+  font-size: 0.82rem;
+}
+
+.chart-tooltip-panel strong {
+  margin-bottom: 0.16rem;
+}
+
+.chart-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.live-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.9rem;
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  padding: 0.2rem 0.65rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.live-pill.live::before {
+  content: "";
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 999px;
+  margin-right: 0.35rem;
+  background: #12b76a;
+}
+
+.live-pill.connecting,
+.live-pill.reconnecting {
+  color: #b54708;
+}
+
+.new-bars {
+  position: absolute;
+  right: var(--space-3);
+  top: var(--space-3);
+  z-index: 4;
+}
+
+.range-presets {
+  grid-column: 1 / -1;
+}
+
+.live-switch,
+.live-toggle-button {
+  align-self: end;
+}
+
+.live-toggle-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-width: 116px;
+  background: #eef2f7;
+  border-color: var(--border);
+  color: #344054;
+}
+
+.live-toggle-button:not(:disabled):hover {
+  background: #e4eaf2;
+}
+
+.live-toggle-button.on {
+  background: #dcfae6;
+  border-color: #75e0a7;
+  color: #067647;
+}
+
+.live-toggle-button.on:not(:disabled):hover {
+  background: #c8f7dc;
+}
+
+.toggle-track {
+  width: 2rem;
+  height: 1.1rem;
+  border-radius: 999px;
+  background: #98a2b3;
+  padding: 2px;
+  transition: background-color 120ms ease;
+}
+
+.live-toggle-button.on .toggle-track {
+  background: #12b76a;
+}
+
+.toggle-thumb {
+  display: block;
+  width: 0.82rem;
+  height: 0.82rem;
+  border-radius: 999px;
+  background: white;
+  transition: transform 120ms ease;
+}
+
+.live-toggle-button.on .toggle-thumb {
+  transform: translateX(0.9rem);
+}
+
 svg {
   width: 100%;
   height: auto;
@@ -388,6 +568,11 @@ svg {
 .chart-axis {
   stroke: #d9e1eb;
   stroke-width: 1.5;
+}
+
+.chart-axis-tick {
+  stroke: #d9e1eb;
+  stroke-width: 1.2;
 }
 
 .chart-grid line {
@@ -434,6 +619,10 @@ svg text {
   font-variant-numeric: tabular-nums;
 }
 
+.chart-x-tick {
+  font-variant-numeric: tabular-nums;
+}
+
 .chart-tooltip {
   pointer-events: none;
 }
@@ -469,6 +658,34 @@ svg text {
   padding: var(--space-3);
   display: grid;
   gap: var(--space-3);
+}
+
+.quality-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+
+.metric-tile {
+  min-width: 0;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  background: var(--panel-muted);
+  padding: var(--space-2);
+}
+
+.metric-tile span {
+  display: block;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.metric-tile strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .section-heading {

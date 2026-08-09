@@ -25,7 +25,18 @@ public class TimeSeriesControllerTests
         var request = new TimeSeriesBatchRequest
         {
             DatasetId = "dataset-1",
-            Points = [new TimeSeriesWritePoint { Timestamp = DateTimeOffset.UtcNow, Value = 42 }]
+            Points =
+            [
+                new TimeSeriesWritePoint
+                {
+                    Timestamp = DateTimeOffset.UtcNow,
+                    Open = 42,
+                    High = 42,
+                    Low = 42,
+                    Close = 42,
+                    Volume = 10
+                }
+            ]
         };
         var repository = new Mock<ITimeSeriesRepository>();
         repository.Setup(x => x.InsertBatchAsync(request, CancellationToken.None))

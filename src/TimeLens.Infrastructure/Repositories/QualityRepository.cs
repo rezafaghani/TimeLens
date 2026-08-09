@@ -75,16 +75,16 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
         }
     }
 
-    public async Task<List<QualityCurveGroupDto>> GetCurveGroupsAsync(CancellationToken cancellationToken = default)
+    public async Task<List<QualitySeriesGroupDto>> GetSeriesGroupsAsync(CancellationToken cancellationToken = default)
     {
         await using var command = context.Postgres.CreateCommand("""
             SELECT id, name, description, group_type, enabled, rule::text, tags::text, created_at, updated_at
-            FROM quality_curve_groups
+            FROM quality_series_groups
             ORDER BY name
             """);
 
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        var result = new List<QualityCurveGroupDto>();
+        var result = new List<QualitySeriesGroupDto>();
         while (await reader.ReadAsync(cancellationToken))
         {
             result.Add(ReadGroup(reader));
@@ -93,12 +93,12 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
         return result;
     }
 
-    public async Task<QualityCurveGroupDto> UpsertCurveGroupAsync(UpsertQualityCurveGroupRequest request, CancellationToken cancellationToken = default)
+    public async Task<QualitySeriesGroupDto> UpsertSeriesGroupAsync(UpsertQualitySeriesGroupRequest request, CancellationToken cancellationToken = default)
     {
         var id = string.IsNullOrWhiteSpace(request.Id) ? $"group-{Guid.NewGuid():N}" : request.Id;
         var now = DateTimeOffset.UtcNow;
         await using var command = context.Postgres.CreateCommand("""
-            INSERT INTO quality_curve_groups (id, name, description, group_type, enabled, rule, tags, created_at, updated_at)
+            INSERT INTO quality_series_groups (id, name, description, group_type, enabled, rule, tags, created_at, updated_at)
             VALUES (@id, @name, @description, @group_type, @enabled, @rule, @tags, @created_at, @updated_at)
             ON CONFLICT (id) DO UPDATE SET
                 name = EXCLUDED.name,
@@ -125,10 +125,10 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
         return ReadGroup(reader);
     }
 
-    public async Task<QualityCurveGroupDto?> SetCurveGroupEnabledAsync(string id, bool enabled, CancellationToken cancellationToken = default)
+    public async Task<QualitySeriesGroupDto?> SetSeriesGroupEnabledAsync(string id, bool enabled, CancellationToken cancellationToken = default)
     {
         await using var command = context.Postgres.CreateCommand("""
-            UPDATE quality_curve_groups
+            UPDATE quality_series_groups
             SET enabled = @enabled, updated_at = @updated_at
             WHERE id = @id
             RETURNING id, name, description, group_type, enabled, rule::text, tags::text, created_at, updated_at
@@ -141,18 +141,18 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
         return await reader.ReadAsync(cancellationToken) ? ReadGroup(reader) : null;
     }
 
-    public async Task<List<QualityCurveGroupMemberDto>> GetCurveGroupMembersAsync(string groupId, CancellationToken cancellationToken = default)
+    public async Task<List<QualitySeriesGroupMemberDto>> GetSeriesGroupMembersAsync(string groupId, CancellationToken cancellationToken = default)
     {
         await using var command = context.Postgres.CreateCommand("""
-            SELECT group_id, dataset_id, curve_id, created_at
-            FROM quality_curve_group_members
+            SELECT group_id, dataset_id, series_id, created_at
+            FROM quality_series_group_members
             WHERE group_id = @group_id
-            ORDER BY curve_id, dataset_id
+            ORDER BY series_id, dataset_id
             """);
         command.Parameters.AddWithValue("group_id", groupId);
 
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        var result = new List<QualityCurveGroupMemberDto>();
+        var result = new List<QualitySeriesGroupMemberDto>();
         while (await reader.ReadAsync(cancellationToken))
         {
             result.Add(ReadGroupMember(reader));
@@ -161,7 +161,7 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
         return result;
     }
 
-    public async Task<List<QualityCurveGroupMemberDto>> ReplaceCurveGroupMembersAsync(string groupId, ReplaceQualityCurveGroupMembersRequest request, CancellationToken cancellationToken = default)
+    public async Task<List<QualitySeriesGroupMemberDto>> ReplaceSeriesGroupMembersAsync(string groupId, ReplaceQualitySeriesGroupMembersRequest request, CancellationToken cancellationToken = default)
     {
         var now = DateTimeOffset.UtcNow;
         await using var connection = await context.Postgres.OpenConnectionAsync(cancellationToken);
@@ -170,7 +170,7 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
         await using (var delete = connection.CreateCommand())
         {
             delete.Transaction = transaction;
-            delete.CommandText = "DELETE FROM quality_curve_group_members WHERE group_id = @group_id";
+            delete.CommandText = "DELETE FROM quality_series_group_members WHERE group_id = @group_id";
             delete.Parameters.AddWithValue("group_id", groupId);
             await delete.ExecuteNonQueryAsync(cancellationToken);
         }
@@ -180,18 +180,18 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
             await using var insert = connection.CreateCommand();
             insert.Transaction = transaction;
             insert.CommandText = """
-                INSERT INTO quality_curve_group_members (group_id, dataset_id, curve_id, created_at)
-                VALUES (@group_id, @dataset_id, @curve_id, @created_at)
+                INSERT INTO quality_series_group_members (group_id, dataset_id, series_id, created_at)
+                VALUES (@group_id, @dataset_id, @series_id, @created_at)
                 """;
             insert.Parameters.AddWithValue("group_id", groupId);
             insert.Parameters.AddWithValue("dataset_id", member.DatasetId);
-            insert.Parameters.AddWithValue("curve_id", member.CurveId);
+            insert.Parameters.AddWithValue("series_id", member.SeriesId);
             insert.Parameters.AddWithValue("created_at", now);
             await insert.ExecuteNonQueryAsync(cancellationToken);
         }
 
         await transaction.CommitAsync(cancellationToken);
-        return await GetCurveGroupMembersAsync(groupId, cancellationToken);
+        return await GetSeriesGroupMembersAsync(groupId, cancellationToken);
     }
 
     public async Task<List<QualityValidationJobDto>> GetJobsAsync(CancellationToken cancellationToken = default)
@@ -297,19 +297,19 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
-    public async Task<List<QualityFindingDto>> GetFindingsAsync(string? datasetId, string? curveId, bool activeOnly, CancellationToken cancellationToken = default)
+    public async Task<List<QualityFindingDto>> GetFindingsAsync(string? datasetId, string? seriesId, bool activeOnly, CancellationToken cancellationToken = default)
     {
         await using var command = context.Postgres.CreateCommand();
         var clauses = new List<string>();
         AddFilter(command, clauses, "dataset_id", datasetId);
-        AddFilter(command, clauses, "curve_id", curveId);
+        AddFilter(command, clauses, "series_id", seriesId);
         if (activeOnly)
         {
             clauses.Add("active = true");
         }
 
         command.CommandText = $"""
-            SELECT id, execution_id, target_execution_id, validator_execution_id, dataset_id, curve_id,
+            SELECT id, execution_id, target_execution_id, validator_execution_id, dataset_id, series_id,
                    validator_id, category, severity, quality_status, trading_impact, title, message,
                    affected_start, affected_end, expected_count, actual_count, affected_count,
                    sample_timestamps::text, details::text, fingerprint, active, created_at, updated_at
@@ -329,15 +329,15 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
         return result;
     }
 
-    public async Task<QualityStatusDto?> GetStatusAsync(string? datasetId, string? curveId, CancellationToken cancellationToken = default)
+    public async Task<QualityStatusDto?> GetStatusAsync(string? datasetId, string? seriesId, CancellationToken cancellationToken = default)
     {
         await using var command = context.Postgres.CreateCommand();
         var clauses = new List<string>();
         AddFilter(command, clauses, "dataset_id", datasetId);
-        AddFilter(command, clauses, "curve_id", curveId);
+        AddFilter(command, clauses, "series_id", seriesId);
 
         command.CommandText = $"""
-            SELECT dataset_id, curve_id, overall_status, category_statuses::text, latest_execution_id, as_of
+            SELECT dataset_id, series_id, overall_status, category_statuses::text, latest_execution_id, as_of
             FROM quality_status_snapshots
             {(clauses.Count == 0 ? "" : $"WHERE {string.Join(" AND ", clauses)}")}
             ORDER BY as_of DESC
@@ -422,16 +422,16 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
             command.Transaction = transaction;
             command.CommandText = """
                 INSERT INTO quality_validation_target_executions (
-                    id, execution_id, dataset_id, curve_id, status, started_at, finished_at,
+                    id, execution_id, dataset_id, series_id, status, started_at, finished_at,
                     evaluated_start, evaluated_end, point_count, error)
                 VALUES (
-                    @id, @execution_id, @dataset_id, @curve_id, @status, @now, @now,
+                    @id, @execution_id, @dataset_id, @series_id, @status, @now, @now,
                     @evaluated_start, @evaluated_end, @point_count, '')
                 """;
             command.Parameters.AddWithValue("id", targetExecutionId);
             command.Parameters.AddWithValue("execution_id", executionId);
             command.Parameters.AddWithValue("dataset_id", result.Metadata.Id);
-            command.Parameters.AddWithValue("curve_id", result.Metadata.CurveId);
+            command.Parameters.AddWithValue("series_id", result.Metadata.SeriesId);
             command.Parameters.AddWithValue("status", result.OverallStatus);
             command.Parameters.AddWithValue("now", now);
             command.Parameters.AddWithValue("evaluated_start", result.Start);
@@ -450,12 +450,12 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
             command.Transaction = transaction;
             command.CommandText = """
                 INSERT INTO quality_status_snapshots (
-                    dataset_id, curve_id, overall_status, category_statuses, latest_execution_id, as_of)
+                    dataset_id, series_id, overall_status, category_statuses, latest_execution_id, as_of)
                 VALUES (
-                    @dataset_id, @curve_id, @overall_status, @category_statuses, @latest_execution_id, @as_of)
+                    @dataset_id, @series_id, @overall_status, @category_statuses, @latest_execution_id, @as_of)
                 """;
             command.Parameters.AddWithValue("dataset_id", result.Metadata.Id);
-            command.Parameters.AddWithValue("curve_id", result.Metadata.CurveId);
+            command.Parameters.AddWithValue("series_id", result.Metadata.SeriesId);
             command.Parameters.AddWithValue("overall_status", result.OverallStatus);
             AddJson(command, "category_statuses", JsonSerializer.SerializeToElement(CategoryStatuses(result.Findings), JsonOptions));
             command.Parameters.AddWithValue("latest_execution_id", executionId);
@@ -533,12 +533,12 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
         command.Transaction = transaction;
         command.CommandText = """
             INSERT INTO quality_findings (
-                id, execution_id, target_execution_id, validator_execution_id, dataset_id, curve_id,
+                id, execution_id, target_execution_id, validator_execution_id, dataset_id, series_id,
                 validator_id, category, severity, quality_status, trading_impact, title, message,
                 affected_start, affected_end, expected_count, actual_count, affected_count,
                 sample_timestamps, details, fingerprint, active, created_at, updated_at)
             VALUES (
-                @id, @execution_id, @target_execution_id, NULL, @dataset_id, @curve_id,
+                @id, @execution_id, @target_execution_id, NULL, @dataset_id, @series_id,
                 @validator_id, @category, @severity, @quality_status, @trading_impact, @title, @message,
                 @affected_start, @affected_end, @expected_count, @actual_count, @affected_count,
                 @sample_timestamps, @details, @fingerprint, true, @created_at, @updated_at)
@@ -547,7 +547,7 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
         command.Parameters.AddWithValue("execution_id", executionId);
         command.Parameters.AddWithValue("target_execution_id", targetExecutionId);
         command.Parameters.AddWithValue("dataset_id", metadata.Id);
-        command.Parameters.AddWithValue("curve_id", metadata.CurveId);
+        command.Parameters.AddWithValue("series_id", metadata.SeriesId);
         command.Parameters.AddWithValue("validator_id", finding.ValidatorId);
         command.Parameters.AddWithValue("category", finding.Category);
         command.Parameters.AddWithValue("severity", finding.Severity);
@@ -561,7 +561,7 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
         AddNullable(command, "actual_count", finding.ActualCount);
         AddNullable(command, "affected_count", finding.AffectedCount);
         AddJson(command, "sample_timestamps", JsonSerializer.SerializeToElement(finding.SampleTimestamps, JsonOptions));
-        AddJson(command, "details", JsonSerializer.SerializeToElement(new { }, JsonOptions));
+        AddJson(command, "details", finding.Details ?? JsonSerializer.SerializeToElement(new { }, JsonOptions));
         command.Parameters.AddWithValue("fingerprint", fingerprint);
         command.Parameters.AddWithValue("created_at", now);
         command.Parameters.AddWithValue("updated_at", now);
@@ -630,7 +630,7 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
         return jobs;
     }
 
-    private static QualityCurveGroupDto ReadGroup(NpgsqlDataReader reader) => new(
+    private static QualitySeriesGroupDto ReadGroup(NpgsqlDataReader reader) => new(
         reader.GetString(0),
         reader.GetString(1),
         reader.GetString(2),
@@ -641,7 +641,7 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
         reader.GetFieldValue<DateTimeOffset>(7),
         reader.GetFieldValue<DateTimeOffset>(8));
 
-    private static QualityCurveGroupMemberDto ReadGroupMember(NpgsqlDataReader reader) => new(
+    private static QualitySeriesGroupMemberDto ReadGroupMember(NpgsqlDataReader reader) => new(
         reader.GetString(0),
         reader.GetString(1),
         reader.GetString(2),

@@ -1,48 +1,35 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { getDatasetCurveId, groupDatasetsByCurve, type CurveSummary } from './curves';
-import { buildScheduleJobHistoryRows, buildScheduleStatusRows, suggestCronFromGranularity, type IngestionExecution, type IngestionJob, type IngestionSchedule, type ScheduleStatusRow } from './ingestionStatus';
+import type { HubConnection } from '@microsoft/signalr';
+import { MarketChart, type ChartMode } from './MarketChart';
+import { getInstrumentId, groupSeriesByInstrument, type InstrumentSummary } from './marketSeries';
+import { buildScheduleJobHistoryRows, buildScheduleStatusRows, suggestCronFromGranularity, type IngestionExecution, type IngestionJob, type IngestionSchedule } from './ingestionStatus';
+import { buildHubConnection, latestTimestamp, upsertBar, type MarketDataSubscription, type MarketDataUpdatedEvent, type TimeSeriesPoint } from './marketDataLive';
+import { formatMarketTime, rangeForPreset, toLocalInput, type RangePreset } from './marketTime';
 import './styles.css';
 
 interface DatasetMetadata {
   id: string;
-  curveId: string;
-  source: string;
+  seriesId: string;
+  provider: string;
+  exchange: string;
+  symbol: string;
+  assetClass: string;
+  baseAsset: string;
+  quoteAsset: string;
+  marketDataType: string;
+  timeframe: string;
+  currency: string;
+  timeZone: string;
+  providerInstrumentId: string;
   endpoint: string;
-  metric: string;
-  dataKind: string;
-  category: string;
   unit: string;
-  country: string;
-  biddingZone: string;
-  region: string;
-  granularity: string;
-  productionType: string;
-  forecastType: string;
-  neighbor: string;
-  licenseInfo: string;
+  calendar: string;
   deprecated: boolean;
   requestParameters: Record<string, string>;
-  firstObservedAt: string;
+  firstAvailableAt: string | null;
+  lastAvailableAt: string | null;
   lastIngestedAt: string;
-}
-
-interface TimeSeriesPoint {
-  timestamp: string;
-  value: number | null;
-  asOf: string;
-}
-
-interface ChartPoint {
-  x: number;
-  y: number;
-  point: TimeSeriesPoint;
-}
-
-interface ChartTick {
-  x: number;
-  label: string;
-  anchor: 'start' | 'middle' | 'end';
 }
 
 interface QualityFinding {
@@ -54,414 +41,178 @@ interface QualityFinding {
   message: string;
   affectedStart: string | null;
   affectedEnd: string | null;
-  expectedCount: number | null;
-  actualCount: number | null;
   affectedCount: number | null;
-  sampleTimestamps: string[];
 }
 
-interface ManualQualityEvaluationResult {
-  metadata: DatasetMetadata;
-  executionId: string | null;
-  pointCount: number;
+interface QualityStatus {
   overallStatus: string;
-  findings: QualityFinding[];
+  latestExecutionId: string;
+  asOf: string;
 }
 
-interface QualitySummary {
-  healthy: number;
-  degraded: number;
-  critical: number;
-  unknown: number;
-  activeFindings: number;
-  activeCriticalFindings: number;
-}
-
-interface QualityValidatorType {
-  id: string;
-  name?: string;
-  displayName: string;
-  description: string;
-  category: string;
-}
-
-interface QualityGroup {
-  id: string;
-  name: string;
-  groupType: string;
-  enabled: boolean;
-}
-
-interface ExecutionDefinition {
-  id: string;
-  name: string;
-  description: string;
-  enabled: boolean;
-  cronExpression: string;
-  timeZone: string;
-  windowStartExpression: string;
-  windowEndExpression: string;
-  maxParallelism: number;
-  timeoutSeconds: number;
-  tags: Record<string, unknown>;
-  targets: { targetType: string; targetId: string; rule?: Record<string, unknown> }[];
-  plugins: { id: string; pluginId: string; pluginVersion: number; enabled: boolean; configuration: Record<string, unknown>; severity: Record<string, unknown>; sortOrder: number }[];
-  createdAt: string;
-  updatedAt: string;
-  lastQueuedAt: string | null;
-}
-
-interface ExecutionRun {
-  id: string;
-  definitionId: string;
-  triggerType: string;
-  status: string;
-  queuedAt: string;
-  startedAt: string | null;
-  finishedAt: string | null;
-  evaluatedStart: string | null;
-  evaluatedEnd: string | null;
-  targetCount: number;
-  completedCount: number;
-  findingCount: number;
-  criticalCount: number;
-  error: string;
-}
-
-const chartBounds = {
-  left: 72,
-  right: 872,
-  top: 28,
-  bottom: 318
-};
-const chartViewBox = { width: 900, height: 380 };
-const chartHorizontalPadding = 18;
 const apiBase = import.meta.env.VITE_API_BASE_URL ?? '/api';
-const refreshIntervalMs = 15_000;
 const defaultTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
-const timeZones = unique([defaultTimeZone, 'UTC', 'Europe/Copenhagen', 'Europe/London', 'America/New_York', 'Asia/Tokyo']);
 
 function App() {
-  const [datasets, setDatasets] = useState<DatasetMetadata[]>([]);
-  const [selectedCurveId, setSelectedCurveId] = useState('');
+  const [series, setSeries] = useState<DatasetMetadata[]>([]);
+  const [selectedInstrumentId, setSelectedInstrumentId] = useState('');
   const [selected, setSelected] = useState<DatasetMetadata | null>(null);
-  const [series, setSeries] = useState<TimeSeriesPoint[]>([]);
+  const [points, setPoints] = useState<TimeSeriesPoint[]>([]);
   const [schedules, setSchedules] = useState<IngestionSchedule[]>([]);
   const [jobs, setJobs] = useState<IngestionJob[]>([]);
   const [executions, setExecutions] = useState<IngestionExecution[]>([]);
+  const [findings, setFindings] = useState<QualityFinding[]>([]);
+  const [qualityStatus, setQualityStatus] = useState<QualityStatus | null>(null);
   const [search, setSearch] = useState('');
-  const [endpoint, setEndpoint] = useState('');
-  const [metric, setMetric] = useState('');
-  const [dataKind, setDataKind] = useState('');
-  const [category, setCategory] = useState('');
+  const [provider, setProvider] = useState('');
+  const [assetClass, setAssetClass] = useState('');
+  const [timeframe, setTimeframe] = useState('');
   const [start, setStart] = useState(toLocalInput(new Date(Date.now() - 24 * 60 * 60 * 1000)));
   const [end, setEnd] = useState(toLocalInput(new Date()));
   const [asOf, setAsOf] = useState('');
   const [timeZone, setTimeZone] = useState(defaultTimeZone);
+  const [chartMode, setChartMode] = useState<ChartMode>('candlestick');
+  const [liveEnabled, setLiveEnabled] = useState(false);
+  const [liveStatus, setLiveStatus] = useState('Disconnected');
+  const [newBarCount, setNewBarCount] = useState(0);
   const [loading, setLoading] = useState(false);
-  const [live, setLive] = useState(true);
-  const [lastLiveRefresh, setLastLiveRefresh] = useState('');
   const [error, setError] = useState('');
-  const [quality, setQuality] = useState<ManualQualityEvaluationResult | null>(null);
-  const [qualityLoading, setQualityLoading] = useState(false);
-  const [qualitySummary, setQualitySummary] = useState<QualitySummary | null>(null);
-  const [qualityValidators, setQualityValidators] = useState<QualityValidatorType[]>([]);
-  const [qualityGroups, setQualityGroups] = useState<QualityGroup[]>([]);
-  const [qualityJobs, setQualityJobs] = useState<ExecutionDefinition[]>([]);
-  const [validationRuns, setValidationRuns] = useState<ExecutionRun[]>([]);
-  const [hoveredPoint, setHoveredPoint] = useState<ChartPoint | null>(null);
+  const connectionRef = useRef<HubConnection | null>(null);
 
   useEffect(() => {
-    void loadDatasets();
-    void loadQualityAdmin();
+    void loadSeriesList();
   }, []);
 
-  const endpoints = useMemo(() => unique(datasets.map(x => x.endpoint)), [datasets]);
-  const providers = useMemo(() => unique(datasets.map(x => x.source)), [datasets]);
-  const metrics = useMemo(() => unique(datasets.map(x => x.metric)), [datasets]);
-  const dataKinds = useMemo(() => unique(datasets.map(x => x.dataKind)), [datasets]);
-  const categories = useMemo(() => unique(datasets.map(x => x.category)), [datasets]);
-  const curves = useMemo(() => groupDatasetsByCurve(datasets), [datasets]);
-  const selectedCurve = curves.find(curve => curve.id === selectedCurveId);
-  const selectedCurveDatasets = (selectedCurve?.datasets ?? []) as DatasetMetadata[];
-  const chartData = useMemo(() => buildChartData(series, selected?.unit ?? '', timeZone), [series, selected?.unit, timeZone]);
-  const latestExecution = executions[0];
-
   useEffect(() => {
-    setHoveredPoint(null);
-  }, [selected?.id, series]);
+    if (!liveEnabled || !selected) {
+      void stopLive();
+      return;
+    }
 
-  useEffect(() => {
-    if (!live) return;
+    let cancelled = false;
+    const buffer: MarketDataUpdatedEvent[] = [];
+    let syncing = true;
+    const subscription = toSubscription(selected);
+    const connection = buildHubConnection(apiBase);
+    connectionRef.current = connection;
 
-    const id = window.setInterval(() => {
-      void loadDatasets(true);
-      if (selectedCurveId) {
-        void loadIngestionStatus(selectedCurveId, true);
+    connection.on('MarketDataUpdated', (event: MarketDataUpdatedEvent) => {
+      if (event.datasetId !== selected.id) return;
+      if (syncing) {
+        buffer.push(event);
+        return;
       }
-      if (selected) {
-        void loadSeries(selected, true);
-        void evaluateQuality(selected, true);
+      applyLiveUpdate(event);
+    });
+    connection.onreconnecting(() => setLiveStatus('Reconnecting'));
+    connection.onreconnected(() => {
+      setLiveStatus('Live');
+      void catchUpAfterReconnect(selected);
+    });
+    connection.onclose(() => setLiveStatus(liveEnabled ? 'Disconnected' : 'Disconnected'));
+
+    void (async () => {
+      try {
+        setLiveStatus('Connecting');
+        await connection.start();
+        await connection.invoke('Subscribe', subscription);
+        setLiveStatus('Live');
+        await loadBars(selected);
+        if (!cancelled) {
+          setPoints(current => buffer.reduce((next, event) => upsertBar(next, event), current));
+          syncing = false;
+        }
+      } catch {
+        if (!cancelled) setLiveStatus('Disconnected');
       }
-      setLastLiveRefresh(new Date().toISOString());
-      void loadQualityAdmin(true);
-    }, refreshIntervalMs);
+    })();
 
-    return () => window.clearInterval(id);
-  }, [live, selected, selectedCurveId, start, end, asOf, timeZone, search, endpoint, metric, dataKind, category]);
+    return () => {
+      cancelled = true;
+      void connection.invoke('Unsubscribe', subscription).catch(() => undefined);
+      void connection.stop();
+    };
+  }, [liveEnabled, selected?.id]);
 
-  async function loadDatasets(silent = false) {
-    if (!silent) setLoading(true);
+  const instruments = useMemo(() => groupSeriesByInstrument(series), [series]);
+  const selectedInstrument = instruments.find(instrument => instrument.id === selectedInstrumentId);
+  const selectedSeries = selectedInstrument?.series ?? [];
+  const providers = unique(series.map(item => item.provider));
+  const assetClasses = unique(series.map(item => item.assetClass));
+  const timeframes = unique(series.map(item => item.timeframe));
+
+  async function loadSeriesList() {
+    setLoading(true);
     setError('');
     try {
       const params = new URLSearchParams();
       if (search) params.set('search', search);
-      if (endpoint) params.set('endpoint', endpoint);
-      if (metric) params.set('metric', metric);
-      if (dataKind) params.set('dataKind', dataKind);
-      if (category) params.set('category', category);
+      if (provider) params.set('provider', provider);
+      if (assetClass) params.set('assetClass', assetClass);
+      if (timeframe) params.set('timeframe', timeframe);
       const response = await fetch(`${apiBase}/datasets?${params}`);
-      if (!response.ok) throw new Error('Dataset request failed');
-      const result = await response.json() as DatasetMetadata[];
-      const resultCurves = groupDatasetsByCurve(result);
-      const nextCurveId = selectedCurveId && resultCurves.some(curve => curve.id === selectedCurveId)
-        ? selectedCurveId
-        : resultCurves[0]?.id ?? '';
-      const nextCurveDatasets = result.filter(dataset => getDatasetCurveId(dataset) === nextCurveId);
-      const currentSelected = nextCurveDatasets.find(dataset => dataset.id === selected?.id) ?? null;
-      const realDataset = nextCurveDatasets.find(dataset => !isSeedPlaceholder(dataset)) ?? null;
-      const nextSelected = currentSelected && !isSeedPlaceholder(currentSelected)
-        ? currentSelected
-        : realDataset ?? currentSelected ?? nextCurveDatasets[0] ?? null;
-
-      setDatasets(result);
-      setSelectedCurveId(nextCurveId);
-      setSelected(nextSelected);
-      if (nextSelected?.id !== selected?.id) {
-        setSeries([]);
-      }
-      if (nextCurveId) {
-        void loadIngestionStatus(nextCurveId, silent);
-      }
-    } catch {
-      setError('Unable to load datasets.');
-    } finally {
-      if (!silent) setLoading(false);
-    }
-  }
-
-  async function loadSeries(dataset = selected, silent = false) {
-    if (!dataset) return;
-    if (!silent) setLoading(true);
-    setError('');
-    try {
-      const params = new URLSearchParams({
-        start: start.trim(),
-        end: end.trim(),
-        timeZone
-      });
-      if (asOf) params.set('asOf', asOf.trim());
-      const response = await fetch(`${apiBase}/datasets/${encodeURIComponent(dataset.id)}/series?${params}`);
       if (!response.ok) throw new Error('Series request failed');
-      setSeries(await response.json() as TimeSeriesPoint[]);
-      void evaluateQuality(dataset, true);
-    } catch {
-      setError('Unable to load series.');
-    } finally {
-      if (!silent) setLoading(false);
-    }
-  }
-
-  async function evaluateQuality(dataset = selected, silent = false) {
-    if (!dataset) return;
-    if (!silent) setQualityLoading(true);
-    try {
-      const [findingsResponse, statusResponse] = await Promise.all([
-        fetch(`${apiBase}/data-quality/findings?datasetId=${encodeURIComponent(dataset.id)}&activeOnly=true`),
-        fetch(`${apiBase}/data-quality/status?datasetId=${encodeURIComponent(dataset.id)}`)
-      ]);
-      if (!findingsResponse.ok) throw new Error('Quality findings request failed');
-      const findings = await findingsResponse.json() as QualityFinding[];
-      const status = statusResponse.ok ? await statusResponse.json() as { overallStatus: string; latestExecutionId: string } : null;
-      setQuality({
-        metadata: dataset,
-        executionId: status?.latestExecutionId ?? null,
-        pointCount: series.length,
-        overallStatus: status?.overallStatus ?? (findings.length ? 'degraded' : 'healthy'),
-        findings
-      });
-      void loadQualityAdmin(true);
-    } catch {
-      setQuality(null);
-      if (!silent) setError('Unable to load data quality results.');
-    } finally {
-      if (!silent) setQualityLoading(false);
-    }
-  }
-
-  async function loadQualityAdmin(silent = false) {
-    if (!silent) setError('');
-    try {
-      const [summaryResponse, validatorsResponse, groupsResponse, definitionsResponse, runsResponse] = await Promise.all([
-        fetch(`${apiBase}/data-quality/summary`),
-        fetch(`${apiBase}/plugins?category=validation`),
-        fetch(`${apiBase}/data-quality/groups`),
-        fetch(`${apiBase}/execution-definitions`),
-        fetch(`${apiBase}/executions`)
-      ]);
-      if (!summaryResponse.ok || !validatorsResponse.ok || !groupsResponse.ok || !definitionsResponse.ok || !runsResponse.ok) {
-        throw new Error('Quality admin request failed');
+      const result = await response.json() as DatasetMetadata[];
+      const nextInstruments = groupSeriesByInstrument(result);
+      const nextInstrumentId = selectedInstrumentId && nextInstruments.some(instrument => instrument.id === selectedInstrumentId)
+        ? selectedInstrumentId
+        : nextInstruments[0]?.id ?? '';
+      const nextSeries = result.filter(item => getInstrumentId(item) === nextInstrumentId);
+      const nextSelected = nextSeries.find(item => item.id === selected?.id) ?? nextSeries[0] ?? null;
+      setSeries(result);
+      setSelectedInstrumentId(nextInstrumentId);
+      setSelected(nextSelected);
+      if (nextSelected) {
+        await Promise.all([loadBars(nextSelected), loadIngestionStatus(nextSelected.seriesId), loadQuality(nextSelected)]);
       }
-
-      setQualitySummary(await summaryResponse.json() as QualitySummary);
-      const plugins = await validatorsResponse.json() as QualityValidatorType[];
-      setQualityValidators(plugins.map(plugin => ({ ...plugin, displayName: plugin.displayName ?? plugin.name ?? plugin.id })));
-      setQualityGroups(await groupsResponse.json() as QualityGroup[]);
-      const definitions = await definitionsResponse.json() as ExecutionDefinition[];
-      setQualityJobs(definitions.filter(definition => definition.plugins.some(plugin => plugin.pluginId.startsWith('timelens.validation.'))));
-      setValidationRuns(await runsResponse.json() as ExecutionRun[]);
     } catch {
-      if (!silent) setError('Unable to load data quality configuration.');
+      setError('Unable to load market data series.');
+    } finally {
+      setLoading(false);
     }
   }
 
-  async function createQualityGroupForSelected() {
-    if (!selected) return;
+  async function loadBars(item = selected) {
+    if (!item) return [];
     setError('');
-    const groupResponse = await fetch(`${apiBase}/data-quality/groups`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name: `${selected.source} ${selected.category} ${selected.dataKind}`,
-        description: `Static quality group for ${selected.curveId || selected.id}`,
-        groupType: 'static',
-        enabled: true,
-        rule: {},
-        tags: {}
-      })
-    });
-    if (!groupResponse.ok) {
-      setError(await groupResponse.text() || 'Unable to create quality group.');
-      return;
-    }
-
-    const group = await groupResponse.json() as QualityGroup;
-    const memberResponse = await fetch(`${apiBase}/data-quality/groups/${encodeURIComponent(group.id)}/members`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ members: [{ datasetId: selected.id, curveId: getDatasetCurveId(selected) }] })
-    });
-    if (!memberResponse.ok) {
-      setError(await memberResponse.text() || 'Unable to set quality group members.');
-      return;
-    }
-
-    await loadQualityAdmin(true);
-  }
-
-  async function createQualityJobForSelected(pluginId: string, name?: string, cronExpression?: string, enabled = true) {
-    if (!selected) return;
-    setError('');
-    const response = await fetch(`${apiBase}/execution-definitions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name: name?.trim() || `${selected.source} ${selected.category} ${pluginId.replace('timelens.validation.', '')}`,
-        description: `Validation schedule for ${selected.id}`,
-        enabled,
-        cronExpression: cronExpression?.trim() || suggestCronFromGranularity(selected.granularity) || '*/30 * * * *',
-        timeZone,
-        maxParallelism: 4,
-        timeoutSeconds: 300,
-        tags: {},
-        targets: [{ targetType: 'dataset', targetId: selected.id, rule: {} }],
-        plugins: [{ pluginId, enabled: true, configuration: {}, severity: {} }]
-      })
-    });
+    const params = new URLSearchParams({ start: start.trim(), end: end.trim(), timeZone });
+    if (asOf) params.set('asOf', asOf.trim());
+    const response = await fetch(`${apiBase}/datasets/${encodeURIComponent(item.id)}/series?${params}`);
     if (!response.ok) {
-      setError(await response.text() || 'Unable to create quality job.');
-      return;
+      setError('Unable to load OHLCV bars.');
+      return [];
     }
-
-    await loadQualityAdmin(true);
+    const result = await response.json() as TimeSeriesPoint[];
+    setPoints(result);
+    setNewBarCount(0);
+    return result;
   }
 
-  async function saveValidationDefinition(definition: ExecutionDefinition) {
-    setError('');
-    const response = await fetch(`${apiBase}/execution-definitions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(definition)
-    });
-    if (!response.ok) {
-      setError(await response.text() || 'Unable to save validation.');
-      return false;
-    }
-    await loadQualityAdmin(true);
-    return true;
+  async function loadIngestionStatus(seriesId: string) {
+    if (!seriesId) return;
+    const encoded = encodeURIComponent(seriesId);
+    const [scheduleResponse, jobResponse, executionResponse] = await Promise.all([
+      fetch(`${apiBase}/ingestion/series/${encoded}/schedules`),
+      fetch(`${apiBase}/ingestion/series/${encoded}/jobs`),
+      fetch(`${apiBase}/ingestion/series/${encoded}/executions`)
+    ]);
+    if (scheduleResponse.ok) setSchedules(await scheduleResponse.json() as IngestionSchedule[]);
+    if (jobResponse.ok) setJobs(await jobResponse.json() as IngestionJob[]);
+    if (executionResponse.ok) setExecutions(await executionResponse.json() as IngestionExecution[]);
   }
 
-  async function setValidationEnabled(definitionId: string, enabled: boolean) {
-    setError('');
-    const response = await fetch(`${apiBase}/execution-definitions/${encodeURIComponent(definitionId)}/enabled`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ enabled })
-    });
-    if (!response.ok) {
-      setError(await response.text() || 'Unable to update validation state.');
-      return false;
-    }
-    await loadQualityAdmin(true);
-    return true;
-  }
-
-  async function runQualityJob(jobId: string, startExpression: string, endExpression: string, triggerType: string) {
-    setError('');
-    const response = await fetch(`${apiBase}/execution-definitions/${encodeURIComponent(jobId)}/runs`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ start: startExpression, end: endExpression, triggerType })
-    });
-    if (!response.ok) {
-      setError(await response.text() || 'Unable to run quality job.');
-      return;
-    }
-
-    await response.json();
-    if (selected) await evaluateQuality(selected, true);
-    await loadQualityAdmin(true);
-  }
-
-  async function loadIngestionStatus(curveId = selectedCurveId, silent = false) {
-    if (!curveId) {
-      setSchedules([]);
-      setJobs([]);
-      setExecutions([]);
-      return;
-    }
-
-    if (!silent) setError('');
-    try {
-      const encoded = encodeURIComponent(curveId);
-      const [scheduleResponse, jobResponse, executionResponse] = await Promise.all([
-        fetch(`${apiBase}/ingestion/curves/${encoded}/schedules`),
-        fetch(`${apiBase}/ingestion/curves/${encoded}/jobs`),
-        fetch(`${apiBase}/ingestion/curves/${encoded}/executions`)
-      ]);
-      if (!scheduleResponse.ok || !jobResponse.ok || !executionResponse.ok) {
-        throw new Error('Ingestion status request failed');
-      }
-      setSchedules(await scheduleResponse.json() as IngestionSchedule[]);
-      setJobs(await jobResponse.json() as IngestionJob[]);
-      setExecutions(await executionResponse.json() as IngestionExecution[]);
-    } catch {
-      if (!silent) setError('Unable to load ingestion status.');
-    }
+  async function loadQuality(item = selected) {
+    if (!item) return;
+    const id = encodeURIComponent(item.seriesId || item.id);
+    const [findingsResponse, statusResponse] = await Promise.all([
+      fetch(`${apiBase}/data-quality/findings?seriesId=${id}&activeOnly=true`),
+      fetch(`${apiBase}/data-quality/status?seriesId=${id}`)
+    ]);
+    setFindings(findingsResponse.ok ? await findingsResponse.json() as QualityFinding[] : []);
+    setQualityStatus(statusResponse.ok ? await statusResponse.json() as QualityStatus : null);
   }
 
   async function saveSchedule(schedule: IngestionSchedule) {
-    setError('');
     const response = await fetch(`${apiBase}/ingestion/schedules/${encodeURIComponent(schedule.id)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -473,101 +224,87 @@ function App() {
         batchSize: schedule.batchSize
       })
     });
-    if (!response.ok) {
-      setError(await response.text() || 'Unable to save schedule.');
-      return false;
-    }
-    await loadIngestionStatus(schedule.curveId);
-    return true;
+    if (response.ok && selected) await loadIngestionStatus(selected.seriesId);
   }
 
-  async function resetSchedule(scheduleId: string) {
-    setError('');
-    const response = await fetch(`${apiBase}/ingestion/schedules/${encodeURIComponent(scheduleId)}/reset`, { method: 'POST' });
-    if (!response.ok) {
-      setError('Unable to reset schedule.');
-      return false;
-    }
-    await loadIngestionStatus(selectedCurveId);
-    return true;
-  }
-
-  async function createBackload(scheduleId: string, datasetId: string, windowStartExpression: string, windowEndExpression: string, batchSize: number) {
-    setError('');
-    const response = await fetch(`${apiBase}/ingestion/schedules/${encodeURIComponent(scheduleId)}/backloads`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ datasetId, windowStartExpression, windowEndExpression, batchSize })
-    });
-    if (!response.ok) {
-      setError(await response.text() || 'Unable to queue backload.');
-      return false;
-    }
-    await loadDatasets(true);
-    await loadIngestionStatus(selectedCurveId);
-    return true;
-  }
-
-  async function createSchedule(dataset: DatasetMetadata) {
-    setError('');
-    const parameters = { ...dataset.requestParameters };
-    delete parameters.start;
-    delete parameters.end;
-    const response = await fetch(`${apiBase}/ingestion/schedules`, {
+  async function queueBackload(schedule: IngestionSchedule) {
+    if (!selected) return;
+    const response = await fetch(`${apiBase}/ingestion/schedules/${encodeURIComponent(schedule.id)}/backloads`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        name: `${dataset.source} ${dataset.category} ${dataset.dataKind}`,
-        curveId: getDatasetCurveId(dataset),
-        source: dataset.source,
-        endpoint: dataset.endpoint,
-        parameters,
-        cronExpression: suggestCronFromGranularity(dataset.granularity) || '*/30 * * * *',
-        enabled: !dataset.deprecated,
-        lookbackHours: 48,
-        windowStartExpression: 'now-48h',
-        windowEndExpression: 'now',
-        batchSize: 500
+        datasetId: selected.id,
+        windowStartExpression: start,
+        windowEndExpression: end,
+        batchSize: schedule.batchSize
       })
     });
     if (!response.ok) {
-      setError(await response.text() || 'Unable to create schedule.');
-      return false;
+      setError(await response.text() || 'Unable to queue backload.');
+      return;
     }
-    await loadIngestionStatus(getDatasetCurveId(dataset));
-    return true;
+    await loadIngestionStatus(selected.seriesId);
   }
 
-  async function setDatasetDeprecated(dataset: DatasetMetadata, deprecated: boolean) {
-    setError('');
-    const response = await fetch(`${apiBase}/datasets/${encodeURIComponent(dataset.id)}/deprecated`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ deprecated })
+  function selectInstrument(instrument: InstrumentSummary) {
+    const next = instrument.series[0] as DatasetMetadata | undefined;
+    setSelectedInstrumentId(instrument.id);
+    setSelected(next ?? null);
+    setPoints([]);
+    setFindings([]);
+    setQualityStatus(null);
+    setLiveEnabled(false);
+    if (next) void Promise.all([loadBars(next), loadIngestionStatus(next.seriesId), loadQuality(next)]);
+  }
+
+  function selectSeries(item: DatasetMetadata) {
+    setSelected(item);
+    setPoints([]);
+    setLiveEnabled(false);
+    void Promise.all([loadBars(item), loadIngestionStatus(item.seriesId), loadQuality(item)]);
+  }
+
+  function applyRangePreset(preset: RangePreset) {
+    const [nextStart, nextEnd] = rangeForPreset(preset);
+    setStart(toLocalInput(nextStart));
+    setEnd(toLocalInput(nextEnd));
+  }
+
+  function applyLiveUpdate(event: MarketDataUpdatedEvent) {
+    setPoints(current => {
+      const previousLatest = latestTimestamp(current);
+      const next = upsertBar(current, event);
+      if (new Date(event.dataTimestamp).getTime() > previousLatest) {
+        setNewBarCount(count => count + 1);
+      }
+      return next;
     });
-    if (!response.ok) {
-      setError('Unable to update dataset metadata.');
-      return false;
-    }
-
-    const updated = await response.json() as DatasetMetadata;
-    setDatasets(current => current.map(item => item.id === updated.id ? updated : item));
-    setSelected(current => current?.id === updated.id ? updated : current);
-    return true;
   }
 
-  function selectCurve(curveId: string) {
-    const curveDatasets = datasets.filter(dataset => getDatasetCurveId(dataset) === curveId);
-    const nextSelected = curveDatasets[0] ?? null;
-    setSelectedCurveId(curveId);
-    setSelected(nextSelected);
-    setSeries([]);
-    setQuality(null);
-    void loadIngestionStatus(curveId);
-    if (nextSelected) {
-      void loadSeries(nextSelected);
-      void evaluateQuality(nextSelected);
+  async function catchUpAfterReconnect(item: DatasetMetadata) {
+    const latest = latestTimestamp(points);
+    if (!latest) {
+      await loadBars(item);
+      return;
     }
+
+    const params = new URLSearchParams({
+      start: toLocalInput(new Date(latest)),
+      end: end.trim(),
+      timeZone
+    });
+    const response = await fetch(`${apiBase}/datasets/${encodeURIComponent(item.id)}/series?${params}`);
+    if (!response.ok) return;
+    const missed = await response.json() as TimeSeriesPoint[];
+    setPoints(current => missed.reduce((next, bar) => upsertBar(next, pointToEvent(item, bar)), current));
+  }
+
+  async function stopLive() {
+    const connection = connectionRef.current;
+    connectionRef.current = null;
+    if (connection) await connection.stop();
+    setLiveStatus('Disconnected');
+    setNewBarCount(0);
   }
 
   return (
@@ -575,842 +312,289 @@ function App() {
       <aside className="sidebar">
         <div className="brand">
           <strong>TimeLens</strong>
-          <span>Time series intelligence</span>
+          <span>Market data intelligence</span>
         </div>
+
         <div className="filter-panel">
-          <label>
-            <span>Search</span>
-            <input value={search} onChange={event => setSearch(event.target.value)} onKeyDown={event => event.key === 'Enter' && void loadDatasets()} placeholder="Dataset name or id" />
-          </label>
-          <label>
-            <span>Metric</span>
-            <select value={metric} onChange={event => setMetric(event.target.value)}>
-              <option value="">All metrics</option>
-              {metrics.map(value => <option key={value} value={value}>{value}</option>)}
-            </select>
-          </label>
-          <label>
-            <span>Series type</span>
-            <select value={dataKind} onChange={event => setDataKind(event.target.value)}>
-              <option value="">All series types</option>
-              {dataKinds.map(value => <option key={value} value={value}>{value}</option>)}
-            </select>
-          </label>
-          <label>
-            <span>Category</span>
-            <select value={category} onChange={event => setCategory(event.target.value)}>
-              <option value="">All categories</option>
-              {categories.map(value => <option key={value} value={value}>{value}</option>)}
-            </select>
-          </label>
-          <label>
-            <span>Provider route</span>
-            <select value={endpoint} onChange={event => setEndpoint(event.target.value)}>
-              <option value="">All provider routes</option>
-              {providers.flatMap(provider => endpoints.map(route => (
-                <option key={`${provider}:${route}`} value={route}>{provider} · {route}</option>
-              )))}
-            </select>
-          </label>
-          <button onClick={() => void loadDatasets()}>Search</button>
+          <label><span>Search</span><input value={search} onChange={event => setSearch(event.target.value)} onKeyDown={event => event.key === 'Enter' && void loadSeriesList()} placeholder="BTC, ETH, provider, series id" /></label>
+          <label><span>Provider</span><select value={provider} onChange={event => setProvider(event.target.value)}><option value="">All providers</option>{providers.map(value => <option key={value}>{value}</option>)}</select></label>
+          <label><span>Asset class</span><select value={assetClass} onChange={event => setAssetClass(event.target.value)}><option value="">All asset classes</option>{assetClasses.map(value => <option key={value}>{value}</option>)}</select></label>
+          <label><span>Timeframe</span><select value={timeframe} onChange={event => setTimeframe(event.target.value)}><option value="">All timeframes</option>{timeframes.map(value => <option key={value}>{value}</option>)}</select></label>
+          <button onClick={() => void loadSeriesList()}>{loading ? 'Loading' : 'Search'}</button>
         </div>
-        <div className="sidebar-heading">Curves</div>
+
+        <div className="sidebar-heading">Instruments</div>
         <div className="dataset-list">
-          {curves.map(curve => (
-            <button
-              key={curve.id}
-              className={selectedCurveId === curve.id ? 'dataset active' : 'dataset'}
-              onClick={() => selectCurve(curve.id)}>
-              <span>{curve.label}</span>
-              <small>{curve.datasets.length} datasets · {curve.providers.join(', ') || 'unknown'} · {curve.categories.join(', ') || 'unknown'} · {curve.dataKinds.join(', ') || 'unknown'}</small>
+          {instruments.map(instrument => (
+            <button key={instrument.id} className={selectedInstrumentId === instrument.id ? 'dataset active' : 'dataset'} onClick={() => selectInstrument(instrument)}>
+              <span>{instrument.label}</span>
+              <small>{instrument.providers.join(', ')} - {instrument.timeframes.join(', ')}</small>
             </button>
           ))}
         </div>
-
-        {selectedCurveId && (
-          <>
-            <div className="sidebar-heading">Datasets</div>
-            <div className="dataset-list">
-              {selectedCurveDatasets.map(dataset => (
-                <button
-                  key={dataset.id}
-                  className={selected?.id === dataset.id ? 'dataset active' : 'dataset'}
-                  onClick={() => {
-                    setSelected(dataset);
-                    void loadSeries(dataset);
-                    void evaluateQuality(dataset);
-                  }}>
-                  <span>{dataset.metric}</span>
-                  <small>{dataset.category} · {dataset.dataKind} · {dataset.country || dataset.biddingZone || dataset.region || 'global'}</small>
-                </button>
-              ))}
-            </div>
-          </>
-        )}
-
-        {!curves.length && <p className="empty-state">No curves found.</p>}
       </aside>
 
       <section className="workspace">
         <section className="control-panel">
           <div className="title-block">
-            <h1>{selectedCurveId || 'Curve explorer'}</h1>
-            <p title={selected?.id}>{selected ? `${selected.metric} · ${selected.id}` : 'Select a curve to inspect details, schedules, jobs, and executions.'}</p>
+            <h1>{selected?.symbol || 'Instrument explorer'}</h1>
+            <p>{selected ? `${selected.provider} - ${selected.marketDataType.toUpperCase()} - ${selected.timeframe} - ${qualityStatus?.overallStatus ?? 'quality unknown'} - Live ${liveEnabled ? liveStatus : 'OFF'}` : 'Select an instrument to inspect market data, ingestion, validation, and metadata.'}</p>
           </div>
-
           <div className="range-toolbar">
-            <DateExpressionInput label="Start" value={start} onChange={setStart} placeholder="today-1 or exact time" />
-            <DateExpressionInput label="End" value={end} onChange={setEnd} placeholder="now, today+1, or exact time" />
-            <DateExpressionInput label="Version time" value={asOf} onChange={setAsOf} placeholder="empty for latest, now, or exact time" />
-            <label>
-              <span>Time zone</span>
-              <select value={timeZone} onChange={event => setTimeZone(event.target.value)}>
-                {timeZones.map(value => <option key={value} value={value}>{formatTimeZoneLabel(value)}</option>)}
-              </select>
-            </label>
-            <label className="live-toggle">
-              <input type="checkbox" checked={live} onChange={event => setLive(event.target.checked)} />
-              Live
-            </label>
-            <button disabled={!selected || loading} onClick={() => loadSeries()}>{loading ? 'Loading' : 'Load series'}</button>
+            <div className="preset-row range-presets">
+              {(['1H', '6H', '24H', '7D', '30D', 'previous-day', 'today', 'next-day'] as RangePreset[]).map(preset => (
+                <button key={preset} type="button" className="secondary" onClick={() => applyRangePreset(preset)}>{rangeLabel(preset)}</button>
+              ))}
+            </div>
+            <DateExpressionInput label="Start" value={start} onChange={setStart} />
+            <DateExpressionInput label="End" value={end} onChange={setEnd} />
+            <DateExpressionInput label="Version time" value={asOf} onChange={setAsOf} />
+            <label><span>Time zone</span><select value={timeZone} onChange={event => setTimeZone(event.target.value)}><option>{defaultTimeZone}</option><option>UTC</option><option>America/New_York</option><option>Europe/London</option></select></label>
+            <button disabled={!selected} onClick={() => void loadBars()}>{loading ? 'Loading' : 'Load bars'}</button>
+            <button
+              type="button"
+              className={`live-toggle-button ${liveEnabled ? 'on' : ''}`}
+              role="switch"
+              aria-checked={liveEnabled}
+              disabled={!selected}
+              onClick={() => setLiveEnabled(value => !value)}>
+              <span className="toggle-track"><span className="toggle-thumb" /></span>
+              <span>{liveEnabled ? 'Live ON' : 'Live OFF'}</span>
+            </button>
           </div>
         </section>
 
         {error && <div className="error">{error}</div>}
 
-        <MetadataPanel dataset={selected} curve={selectedCurve} curveId={selectedCurveId} datasetCount={selectedCurveDatasets.length} timeZone={timeZone} onSetDeprecated={setDatasetDeprecated} />
+        <MetadataPanel item={selected} instrument={selectedInstrument} timeZone={timeZone} onSelectSeries={selectSeries} />
+        <QualityPanel status={qualityStatus} findings={findings} timeZone={timeZone} onRefresh={() => void loadQuality()} />
+        <IngestionPanel schedules={schedules} jobs={jobs} executions={executions} timeZone={timeZone} onSave={saveSchedule} onBackload={queueBackload} />
 
-        <QualityPanel
-          dataset={selected}
-          quality={quality}
-          loading={qualityLoading}
+        <MarketChart
+          points={points}
+          mode={chartMode}
+          currency={selected?.currency ?? selected?.quoteAsset ?? ''}
           timeZone={timeZone}
-          onEvaluate={() => evaluateQuality()}
+          liveEnabled={liveEnabled}
+          liveStatus={liveStatus}
+          newBarCount={newBarCount}
+          onModeChange={setChartMode}
+          onJumpLatest={() => setNewBarCount(0)}
         />
 
-        <QualityAdminPanel
-          selected={selected}
-          summary={qualitySummary}
-          validators={qualityValidators}
-          groups={qualityGroups}
-          jobs={qualityJobs}
-          runs={validationRuns}
-          onCreateGroup={createQualityGroupForSelected}
-          onCreateJob={createQualityJobForSelected}
-          onSaveJob={saveValidationDefinition}
-          onSetEnabled={setValidationEnabled}
-          onRunJob={runQualityJob}
-        />
-
-        <IngestionStatusPanel
-          curveId={selectedCurveId}
-          schedules={schedules}
-          jobs={jobs}
-          executions={executions}
-          latestExecution={latestExecution}
-          datasets={selectedCurveDatasets}
-          scheduleDataset={selected}
-          timeZone={timeZone}
-          onCreateSchedule={createSchedule}
-          onSaveSchedule={saveSchedule}
-          onResetSchedule={resetSchedule}
-          onCreateBackload={createBackload}
-        />
-
-        <section className="chart-zone">
-          <svg viewBox={`0 0 ${chartViewBox.width} ${chartViewBox.height}`} role="img" aria-label="Dataset time series">
-            {selected?.unit && <text className="chart-y-title" x={chartBounds.left} y={chartBounds.top - 12}>{selected.unit}</text>}
-            {chartData.yTicks.map(tick => (
-              <g className="chart-grid" key={`y-${tick.label}`}>
-                <line x1={chartBounds.left} y1={tick.y} x2={chartBounds.right} y2={tick.y} />
-                <text className="chart-y-tick" x={chartBounds.left - 12} y={tick.y + 4} textAnchor="end">{tick.label}</text>
-              </g>
-            ))}
-            {chartData.xTicks.map(tick => (
-              <g className="chart-grid" key={`x-${tick.label}-${tick.x}`}>
-                <line x1={tick.x} y1={chartBounds.top} x2={tick.x} y2={chartBounds.bottom} />
-                <text x={tick.x} y={chartBounds.bottom + 30} textAnchor={tick.anchor}>{tick.label}</text>
-              </g>
-            ))}
-            <line className="chart-axis" x1={chartBounds.left} y1={chartBounds.bottom} x2={chartBounds.right} y2={chartBounds.bottom} />
-            <line className="chart-axis" x1={chartBounds.left} y1={chartBounds.top} x2={chartBounds.left} y2={chartBounds.bottom} />
-            {hoveredPoint && <line className="chart-hover-line" x1={hoveredPoint.x} y1={chartBounds.top} x2={hoveredPoint.x} y2={chartBounds.bottom} />}
-            {chartData.path && <path d={chartData.path} />}
-            {chartData.points.map((chartPoint, index) => (
-              <circle
-                key={`${chartPoint.point.timestamp}-${chartPoint.point.asOf}-${index}`}
-                cx={chartPoint.x}
-                cy={chartPoint.y}
-                r="4"
-                tabIndex={0}
-                aria-label={`${formatDate(chartPoint.point.timestamp, timeZone)} ${formatValue(chartPoint.point.value, selected?.unit ?? '')}`}
-                onMouseEnter={() => setHoveredPoint(chartPoint)}
-                onMouseLeave={() => setHoveredPoint(null)}
-                onFocus={() => setHoveredPoint(chartPoint)}
-                onBlur={() => setHoveredPoint(null)}
-              />
-            ))}
-            {hoveredPoint && (
-              <g className="chart-tooltip" transform={tooltipTransform(hoveredPoint)}>
-                <rect width="238" height="44" rx="6" />
-                <text x="10" y="17">
-                  {formatDate(hoveredPoint.point.timestamp, timeZone)}
-                  <tspan x="10" dy="17">{formatValue(hoveredPoint.point.value, selected?.unit ?? '')}</tspan>
-                </text>
-              </g>
-            )}
-            {!chartData.path && <text x={chartViewBox.width / 2} y={chartViewBox.height / 2} textAnchor="middle">No points loaded</text>}
-          </svg>
-          <div className="chart-footer">
-            <span>{series.length} points</span>
-            <span>{selected?.lastIngestedAt ? `Last ingested ${formatDate(selected.lastIngestedAt, timeZone)}` : 'No ingestion timestamp'}</span>
-            <span>{lastLiveRefresh ? `Live refresh ${formatDate(lastLiveRefresh, timeZone)}` : `Live refresh every ${refreshIntervalMs / 1000}s`}</span>
-          </div>
-        </section>
-
-        <PointTable points={series} unit={selected?.unit ?? ''} timeZone={timeZone} />
+        <PointTable points={points} currency={selected?.currency ?? ''} timeZone={timeZone} />
       </section>
     </main>
   );
 }
 
-function QualityPanel({
-  dataset,
-  quality,
-  loading,
-  timeZone,
-  onEvaluate
-}: {
-  dataset: DatasetMetadata | null;
-  quality: ManualQualityEvaluationResult | null;
-  loading: boolean;
-  timeZone: string;
-  onEvaluate: () => Promise<void>;
-}) {
-  const findings = quality?.findings ?? [];
-  const critical = findings.filter(x => x.severity === 'critical').length;
-  const warnings = findings.filter(x => x.severity === 'warning').length;
-
-  return (
-    <section className="quality-panel">
-      <header className="section-heading">
-        <div>
-          <h2>Data quality</h2>
-          <p>{dataset ? `${dataset.source} · ${dataset.category} · ${dataset.dataKind}` : 'Select a dataset to evaluate quality.'}</p>
-        </div>
-        <div className="section-actions">
-          {quality && <StatusBadge status={quality.overallStatus} />}
-          <button type="button" disabled={!dataset || loading} onClick={() => void onEvaluate()}>{loading ? 'Refreshing' : 'Refresh results'}</button>
-        </div>
-      </header>
-
-      <div className="status-summary">
-        <MetricTile label="Checked points" value={(quality?.pointCount ?? 0).toLocaleString()} />
-        <MetricTile label="Findings" value={findings.length.toLocaleString()} />
-        <MetricTile label="Critical" value={critical.toLocaleString()} />
-        <MetricTile label="Warnings" value={warnings.toLocaleString()} />
-      </div>
-
-      <div className="table-scroll compact">
-        <table>
-          <thead><tr><th>Status</th><th>Finding</th><th>Affected range</th><th>Count</th></tr></thead>
-          <tbody>
-            {findings.slice(0, 12).map(finding => (
-              <tr key={`${finding.validatorId}-${finding.affectedStart ?? ''}-${finding.title}`}>
-                <td><StatusBadge status={finding.severity} /></td>
-                <td>
-                  <strong>{finding.title}</strong>
-                  <small>{finding.message}</small>
-                </td>
-                <td>{formatRange(finding.affectedStart, finding.affectedEnd, timeZone)}</td>
-                <td>{finding.affectedCount?.toLocaleString() ?? ''}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {dataset && quality && findings.length === 0 && <p className="empty-state">No quality findings for this range.</p>}
-        {dataset && !quality && !loading && <p className="empty-state">Quality has not been checked for this range.</p>}
-      </div>
-    </section>
-  );
+function toSubscription(item: DatasetMetadata): MarketDataSubscription {
+  return {
+    datasetId: item.id,
+    seriesId: item.seriesId,
+    providerId: item.provider,
+    symbol: item.symbol,
+    marketDataType: item.marketDataType,
+    timeframe: item.timeframe
+  };
 }
 
-function QualityAdminPanel({
-  selected,
-  summary,
-  validators,
-  groups,
-  jobs,
-  runs,
-  onCreateGroup,
-  onCreateJob,
-  onSaveJob,
-  onSetEnabled,
-  onRunJob
-}: {
-  selected: DatasetMetadata | null;
-  summary: QualitySummary | null;
-  validators: QualityValidatorType[];
-  groups: QualityGroup[];
-  jobs: ExecutionDefinition[];
-  runs: ExecutionRun[];
-  onCreateGroup: () => Promise<void>;
-  onCreateJob: (pluginId: string, name?: string, cronExpression?: string, enabled?: boolean) => Promise<void>;
-  onSaveJob: (job: ExecutionDefinition) => Promise<boolean>;
-  onSetEnabled: (jobId: string, enabled: boolean) => Promise<boolean>;
-  onRunJob: (jobId: string, startExpression: string, endExpression: string, triggerType: string) => Promise<void>;
-}) {
-  const [validatorId, setValidatorId] = useState('timelens.validation.completeness.missing-timestamps');
-  const [name, setName] = useState('');
-  const [cronExpression, setCronExpression] = useState(selected ? suggestCronFromGranularity(selected.granularity) || '*/30 * * * *' : '*/30 * * * *');
-  const [enabled, setEnabled] = useState(true);
-  const [runStart, setRunStart] = useState('now-24h');
-  const [runEnd, setRunEnd] = useState('now');
-  const [editingId, setEditingId] = useState('');
-  const [editName, setEditName] = useState('');
-  const [editPluginId, setEditPluginId] = useState('');
-  const [editCronExpression, setEditCronExpression] = useState('');
-  const [editConfiguration, setEditConfiguration] = useState('{}');
-  const selectedJobs = selected
-    ? jobs.filter(job => job.targets.some(target => target.targetId === selected.id))
-    : [];
-  const latestRunByDefinition = latestBy(runs, run => run.definitionId, run => run.queuedAt);
-  const history = runs.filter(run => selectedJobs.some(job => job.id === run.definitionId));
-
-  useEffect(() => {
-    if (validators.length && !validators.some(validator => validator.id === validatorId)) {
-      setValidatorId(validators[0].id);
-    }
-  }, [validators, validatorId]);
-
-  useEffect(() => {
-    setName(selected ? `${selected.source} ${selected.category} validation` : '');
-    setCronExpression(selected ? suggestCronFromGranularity(selected.granularity) || '*/30 * * * *' : '*/30 * * * *');
-  }, [selected]);
-
-  return (
-    <section className="quality-panel">
-      <header className="section-heading">
-        <div>
-          <h2>Validation center</h2>
-          <p>{groups.length} groups · {jobs.length} schedules · {validators.length} validation checks</p>
-        </div>
-        <StatusBadge status={summary?.activeCriticalFindings ? 'critical' : summary?.activeFindings ? 'degraded' : 'healthy'} />
-      </header>
-
-      <div className="status-summary">
-        <MetricTile label="Healthy" value={(summary?.healthy ?? 0).toLocaleString()} />
-        <MetricTile label="Degraded" value={(summary?.degraded ?? 0).toLocaleString()} />
-        <MetricTile label="Critical" value={(summary?.critical ?? 0).toLocaleString()} />
-        <MetricTile label="Active findings" value={(summary?.activeFindings ?? 0).toLocaleString()} />
-      </div>
-
-      <div className="quality-config-row">
-        <label>
-          <span>Validation name</span>
-          <input value={name} onChange={event => setName(event.target.value)} placeholder="Validation name" />
-        </label>
-        <label>
-          <span>Plugin</span>
-          <select value={validatorId} onChange={event => setValidatorId(event.target.value)}>
-            {validators.map(validator => <option key={validator.id} value={validator.id}>{validator.displayName}</option>)}
-          </select>
-        </label>
-        <label>
-          <span>Schedule</span>
-          <input value={cronExpression} onChange={event => setCronExpression(event.target.value)} placeholder="*/30 * * * *" />
-        </label>
-        <label className="live-toggle">
-          <input type="checkbox" checked={enabled} onChange={event => setEnabled(event.target.checked)} />
-          Enabled
-        </label>
-        <button type="button" disabled={!selected || validators.length === 0} onClick={() => void onCreateJob(validatorId, name, cronExpression, enabled)}>Create validation</button>
-        <button type="button" className="secondary" disabled={!selected} onClick={() => void onCreateGroup()}>Add group</button>
-      </div>
-
-      <div className="quality-config-row">
-        <DateExpressionInput label="Manual start" value={runStart} onChange={setRunStart} placeholder="last week, now-7d, or ISO" />
-        <DateExpressionInput label="Manual end" value={runEnd} onChange={setRunEnd} placeholder="now or ISO" />
-        <span className="muted">Date ranges are used only for manual and backfill runs.</span>
-      </div>
-
-      <div className="table-scroll compact">
-        <table>
-          <thead><tr><th>Validation</th><th>Plugin</th><th>Schedule</th><th>Status</th><th>Last run</th><th>Findings</th><th></th></tr></thead>
-          <tbody>
-            {selectedJobs.slice(0, 8).map(job => (
-              <tr key={job.id}>
-                <td>
-                  {editingId === job.id ? (
-                    <input value={editName} onChange={event => setEditName(event.target.value)} />
-                  ) : <strong>{job.name}</strong>}
-                  <small>{job.id}</small>
-                </td>
-                <td>{editingId === job.id ? (
-                  <>
-                    <select value={editPluginId} onChange={event => setEditPluginId(event.target.value)}>
-                      {validators.map(validator => <option key={validator.id} value={validator.id}>{validator.displayName}</option>)}
-                    </select>
-                    <input value={editConfiguration} onChange={event => setEditConfiguration(event.target.value)} placeholder="Plugin parameters JSON" />
-                  </>
-                ) : job.plugins.filter(plugin => plugin.enabled).map(plugin => plugin.pluginId.replace('timelens.validation.', '')).join(', ')}</td>
-                <td>{editingId === job.id ? <input value={editCronExpression} onChange={event => setEditCronExpression(event.target.value)} /> : job.cronExpression}<small>{job.lastQueuedAt ? `Queued ${formatDate(job.lastQueuedAt, job.timeZone)}` : 'Next scheduled by cron'}</small></td>
-                <td><StatusBadge status={job.enabled ? 'enabled' : 'disabled'} /></td>
-                <td>{latestRunByDefinition.get(job.id) ? <StatusBadge status={latestRunByDefinition.get(job.id)!.status} /> : <span className="muted">No runs</span>}<small>{latestRunByDefinition.get(job.id)?.triggerType ?? ''}</small></td>
-                <td>{latestRunByDefinition.get(job.id)?.findingCount.toLocaleString() ?? ''}</td>
-                <td className="button-row">
-                  {editingId === job.id ? (
-                    <button type="button" className="table-action" onClick={() => {
-                      let configuration: Record<string, unknown>;
-                      try {
-                        configuration = JSON.parse(editConfiguration) as Record<string, unknown>;
-                      } catch {
-                        configuration = {};
-                      }
-                      void onSaveJob({
-                        ...job,
-                        name: editName,
-                        cronExpression: editCronExpression,
-                        plugins: job.plugins.map((plugin, index) => index === 0 ? { ...plugin, pluginId: editPluginId, configuration } : plugin),
-                        targets: selected ? [{ targetType: 'dataset', targetId: selected.id, rule: {} }] : job.targets
-                      }).then(saved => saved && setEditingId(''));
-                    }}>Save</button>
-                  ) : (
-                    <button type="button" className="table-action" onClick={() => {
-                      setEditingId(job.id);
-                      setEditName(job.name);
-                      setEditPluginId(job.plugins[0]?.pluginId ?? validators[0]?.id ?? '');
-                      setEditCronExpression(job.cronExpression);
-                      setEditConfiguration(JSON.stringify(job.plugins[0]?.configuration ?? {}));
-                    }}>Edit</button>
-                  )}
-                  <button type="button" className="table-action" onClick={() => void onSetEnabled(job.id, !job.enabled)}>{job.enabled ? 'Disable' : 'Enable'}</button>
-                  <button type="button" className="table-action" onClick={() => void onRunJob(job.id, runStart, runEnd, 'manual')}>Run</button>
-                  <button type="button" className="table-action" onClick={() => void onRunJob(job.id, runStart, runEnd, 'backfill')}>Backfill</button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {selected && selectedJobs.length === 0 && <p className="empty-state">No validation schedules target this dataset yet.</p>}
-        {!selected && <p className="empty-state">Select a dataset to configure validation schedules.</p>}
-      </div>
-
-      <div className="table-scroll compact">
-        <table>
-          <thead><tr><th>Execution time</th><th>Status</th><th>Plugin</th><th>Duration</th><th>Target</th><th>Summary</th><th>Triggered by</th><th>Errors</th></tr></thead>
-          <tbody>
-            {history.slice(0, 12).map(run => {
-              const definition = jobs.find(job => job.id === run.definitionId);
-              return (
-                <tr key={run.id}>
-                  <td>{formatDate(run.queuedAt, definition?.timeZone ?? 'UTC')}</td>
-                  <td><StatusBadge status={run.status} /></td>
-                  <td>{definition?.plugins.map(plugin => plugin.pluginId.replace('timelens.validation.', '')).join(', ') ?? run.definitionId}</td>
-                  <td>{formatDuration(run.startedAt, run.finishedAt)}</td>
-                  <td>{definition?.targets.map(target => target.targetId).join(', ') ?? ''}</td>
-                  <td>{run.findingCount.toLocaleString()} findings · {run.criticalCount.toLocaleString()} critical</td>
-                  <td>{run.triggerType}</td>
-                  <td>{run.error}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-        {selected && history.length === 0 && <p className="empty-state">No validation history for this dataset yet.</p>}
-      </div>
-    </section>
-  );
+function rangeLabel(preset: RangePreset) {
+  return preset === 'previous-day' ? '-1D' : preset === 'next-day' ? '+1D' : preset === 'today' ? 'Today' : preset;
 }
 
-function IngestionStatusPanel({
-  curveId,
-  schedules,
-  jobs,
-  executions,
-  latestExecution,
-  datasets,
-  scheduleDataset,
-  timeZone,
-  onCreateSchedule,
-  onSaveSchedule,
-  onResetSchedule,
-  onCreateBackload
-}: {
-  curveId: string;
-  schedules: IngestionSchedule[];
-  jobs: IngestionJob[];
-  executions: IngestionExecution[];
-  latestExecution?: IngestionExecution;
-  datasets: DatasetMetadata[];
-  scheduleDataset: DatasetMetadata | null;
-  timeZone: string;
-  onCreateSchedule: (dataset: DatasetMetadata) => Promise<boolean>;
-  onSaveSchedule: (schedule: IngestionSchedule) => Promise<boolean>;
-  onResetSchedule: (scheduleId: string) => Promise<boolean>;
-  onCreateBackload: (scheduleId: string, datasetId: string, windowStartExpression: string, windowEndExpression: string, batchSize: number) => Promise<boolean>;
-}) {
-  const [historyScheduleId, setHistoryScheduleId] = useState('');
-  const [editingSchedule, setEditingSchedule] = useState<IngestionSchedule | null>(null);
-  const [backloadSchedule, setBackloadSchedule] = useState<IngestionSchedule | null>(null);
-  const scheduleRows = buildScheduleStatusRows(schedules, jobs, executions);
-  const historySchedule = scheduleRows.find(row => row.id === historyScheduleId);
-  const historyRows = historyScheduleId ? buildScheduleJobHistoryRows(historyScheduleId, jobs, executions).slice(0, 20) : [];
-  const healthySchedules = scheduleRows.filter(row => row.displayStatus === 'completed' || row.displayStatus === 'working').length;
-  const failedSchedules = scheduleRows.filter(row => row.displayStatus === 'failed' || row.displayStatus === 'retrying').length;
-  const defaultDataset = scheduleDataset ?? datasets[0];
-
-  return (
-    <section className="ingestion-panel">
-      <header className="section-heading">
-        <div>
-          <h2>Curve ingestion</h2>
-          <p>{curveId ? `${curveId} · ` : ''}{schedules.length} schedules · latest result by schedule</p>
-        </div>
-        {defaultDataset && <button type="button" onClick={() => void onCreateSchedule(defaultDataset)}>Add schedule</button>}
-        {latestExecution && <StatusBadge status={latestExecution.status} />}
-      </header>
-
-      <div className="status-summary">
-        <MetricTile className="metric-tile-compact" label="Enabled schedules" value={schedules.filter(x => x.enabled).length.toString()} />
-        <MetricTile label="Healthy schedules" value={healthySchedules.toString()} />
-        <MetricTile label="Needs attention" value={failedSchedules.toString()} />
-        <MetricTile label="Latest inserted" value={(latestExecution?.inserted ?? 0).toLocaleString()} />
-      </div>
-
-      <ScheduleStatusTable
-        rows={scheduleRows}
-        timeZone={timeZone}
-        onOpenHistory={setHistoryScheduleId}
-        onEdit={scheduleId => setEditingSchedule(schedules.find(schedule => schedule.id === scheduleId) ?? null)}
-        onBackload={scheduleId => setBackloadSchedule(schedules.find(schedule => schedule.id === scheduleId) ?? null)}
-      />
-      {editingSchedule && (
-        <ScheduleEditModal
-          schedule={editingSchedule}
-          datasets={datasets}
-          onClose={() => setEditingSchedule(null)}
-          onSave={async schedule => {
-            if (await onSaveSchedule(schedule)) {
-              setEditingSchedule(null);
-            }
-          }}
-          onReset={async scheduleId => {
-            if (await onResetSchedule(scheduleId)) {
-              setEditingSchedule(null);
-            }
-          }}
-        />
-      )}
-      {backloadSchedule && (
-        <BackloadModal
-          schedule={backloadSchedule}
-          datasets={datasets}
-          onClose={() => setBackloadSchedule(null)}
-          onCreate={async (datasetId, windowStartExpression, windowEndExpression, batchSize) => {
-            if (await onCreateBackload(backloadSchedule.id, datasetId, windowStartExpression, windowEndExpression, batchSize)) {
-              setBackloadSchedule(null);
-            }
-          }}
-        />
-      )}
-      {historySchedule && (
-        <ScheduleHistoryModal
-          schedule={historySchedule}
-          rows={historyRows}
-          timeZone={timeZone}
-          onClose={() => setHistoryScheduleId('')}
-        />
-      )}
-    </section>
-  );
+function pointToEvent(item: DatasetMetadata, point: TimeSeriesPoint): MarketDataUpdatedEvent {
+  return {
+    eventId: `catch-up-${item.id}-${point.timestamp}`,
+    version: 1,
+    occurredAt: point.asOf,
+    datasetId: item.id,
+    seriesId: item.seriesId,
+    providerId: item.provider,
+    exchange: item.exchange,
+    instrumentId: item.providerInstrumentId,
+    symbol: item.symbol,
+    marketDataType: item.marketDataType,
+    timeframe: item.timeframe,
+    operation: 'upsert',
+    dataTimestamp: point.timestamp,
+    asOf: point.asOf,
+    bar: point
+  };
 }
 
-function MetricTile({ label, value, className = '' }: { label: string; value: string; className?: string }) {
-  return (
-    <div className={`metric-tile ${className}`.trim()}>
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
-  );
-}
-
-function DateExpressionInput({
-  label,
-  value,
-  placeholder,
-  onChange
-}: {
-  label: string;
-  value: string;
-  placeholder: string;
-  onChange: (value: string) => void;
-}) {
+function DateExpressionInput({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
   return (
     <label>
       <span>{label}</span>
       <div className="date-expression">
-        <input value={value} onChange={event => onChange(event.target.value)} placeholder={placeholder} />
-        <input
-          aria-label={`${label} picker`}
-          type="datetime-local"
-          value={toPickerInput(value)}
-          onChange={event => onChange(event.target.value)}
-        />
+        <input value={value} onChange={event => onChange(event.target.value)} placeholder="now-24h or ISO time" />
+        <input aria-label={`${label} picker`} type="datetime-local" value={toPickerInput(value)} onChange={event => onChange(event.target.value)} />
       </div>
     </label>
   );
 }
 
-function ScheduleStatusTable({
-  rows,
-  timeZone,
-  onOpenHistory,
-  onEdit,
-  onBackload
-}: {
-  rows: ReturnType<typeof buildScheduleStatusRows>;
-  timeZone: string;
-  onOpenHistory: (scheduleId: string) => void;
-  onEdit: (scheduleId: string) => void;
-  onBackload: (scheduleId: string) => void;
-}) {
+function MetadataPanel({ item, instrument, timeZone, onSelectSeries }: { item: DatasetMetadata | null; instrument?: InstrumentSummary; timeZone: string; onSelectSeries: (item: DatasetMetadata) => void }) {
+  if (!item) return <section className="metadata-panel"><h2>Instrument details</h2><p>No instrument selected.</p></section>;
+  const rows = [
+    ['Provider', item.provider],
+    ['Exchange', item.exchange],
+    ['Symbol', item.symbol],
+    ['Asset class', item.assetClass],
+    ['Base asset', item.baseAsset],
+    ['Quote asset', item.quoteAsset],
+    ['Data type', item.marketDataType],
+    ['Timeframe', item.timeframe],
+    ['Currency', item.currency],
+    ['Calendar', item.calendar],
+    ['Series id', item.seriesId],
+    ['Provider instrument', item.providerInstrumentId],
+    ['First available', item.firstAvailableAt ? formatDate(item.firstAvailableAt, timeZone) : ''],
+    ['Last available', item.lastAvailableAt ? formatDate(item.lastAvailableAt, timeZone) : ''],
+    ['Last ingested', item.lastIngestedAt ? formatDate(item.lastIngestedAt, timeZone) : '']
+  ].filter(([, value]) => value);
+
   return (
-    <section className="status-table">
-      <h3>Schedule status</h3>
-      <div className="table-scroll compact">
-        <table>
-          <thead><tr><th>Schedule</th><th>Latest result</th><th>Last queued</th><th>Rows</th><th></th></tr></thead>
-          <tbody>
-            {rows.map(row => (
-              <tr key={row.id} title={row.latestExecution?.error || row.latestJob?.error || row.id}>
-                <td>
-                  <strong>{row.name}</strong>
-                  <small>{row.detail}</small>
-                </td>
-                <td>
-                  <StatusBadge status={row.displayStatus} />
-                  <small>{row.displayExecution?.error || row.latestExecution?.error || row.latestJob?.error || row.latestJob?.id || 'No jobs yet'}</small>
-                </td>
-                <td>{row.latestJob?.queuedAt ? formatDate(row.latestJob.queuedAt, timeZone) : (row.latestJob ? '' : 'Never')}</td>
-                <td>{row.displayExecution ? `${row.displayExecution.inserted.toLocaleString()} inserted · ${row.displayExecution.skipped.toLocaleString()} skipped` : ''}</td>
-                <td>
-                  <button className="table-action" type="button" onClick={() => onEdit(row.id)}>
-                    Edit
-                  </button>
-                  <button className="table-action" type="button" onClick={() => onBackload(row.id)}>
-                    Backload
-                  </button>
-                  <button className="table-action" type="button" onClick={() => onOpenHistory(row.id)}>
-                    History
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+    <section className="metadata-panel">
+      <h2>Instrument details</h2>
+      <dl>{rows.map(([label, value]) => <React.Fragment key={label}><dt>{label}</dt><dd>{value}</dd></React.Fragment>)}</dl>
+      <div className="preset-row">
+        {(instrument?.series as DatasetMetadata[] | undefined ?? []).map(series => (
+          <button key={series.id} className={series.id === item.id ? '' : 'secondary'} onClick={() => onSelectSeries(series)}>
+            {series.timeframe}
+          </button>
+        ))}
       </div>
     </section>
   );
 }
 
-function ScheduleEditModal({
-  schedule,
-  datasets,
-  onClose,
-  onSave,
-  onReset
-}: {
-  schedule: IngestionSchedule;
-  datasets: DatasetMetadata[];
-  onClose: () => void;
-  onSave: (schedule: IngestionSchedule) => Promise<void>;
-  onReset: (scheduleId: string) => Promise<void>;
-}) {
+function QualityPanel({ status, findings, timeZone, onRefresh }: { status: QualityStatus | null; findings: QualityFinding[]; timeZone: string; onRefresh: () => void }) {
+  const summary = qualitySummary(findings);
+  return (
+    <section className="quality-panel">
+      <header className="section-heading">
+        <div><h2>Data quality</h2><p>{status?.asOf ? `Last validation ${formatDate(status.asOf, timeZone)}` : 'No validation history yet'}</p></div>
+        <div className="section-actions">
+          <StatusBadge status={status?.overallStatus ?? (findings.length ? 'degraded' : 'unknown')} />
+          <button type="button" onClick={onRefresh}>Refresh results</button>
+        </div>
+      </header>
+      <div className="quality-summary-grid">
+        <MetricTile label="Freshness" value={summary.freshness ? summary.freshness : 'Healthy'} />
+        <MetricTile label="Gaps" value={summary.gaps.toLocaleString()} />
+        <MetricTile label="Duplicates" value={summary.duplicates.toLocaleString()} />
+        <MetricTile label="Warnings" value={summary.warnings.toLocaleString()} />
+      </div>
+      <div className="table-scroll compact">
+        <table>
+          <thead><tr><th>Status</th><th>Finding</th><th>Affected range</th><th>Count</th></tr></thead>
+          <tbody>{findings.slice(0, 12).map(finding => (
+            <tr key={`${finding.validatorId}-${finding.affectedStart ?? ''}`}>
+              <td><StatusBadge status={finding.severity} /></td>
+              <td><strong>{finding.title}</strong><small>{finding.message}</small></td>
+              <td>{formatRange(finding.affectedStart, finding.affectedEnd, timeZone)}</td>
+              <td>{finding.affectedCount?.toLocaleString() ?? ''}</td>
+            </tr>
+          ))}</tbody>
+        </table>
+        {!findings.length && <p className="empty-state">No active validation findings.</p>}
+      </div>
+    </section>
+  );
+}
+
+function MetricTile({ label, value }: { label: string; value: string }) {
+  return <div className="metric-tile"><span>{label}</span><strong>{value}</strong></div>;
+}
+
+function qualitySummary(findings: QualityFinding[]) {
+  return {
+    freshness: findings.find(x => x.category === 'freshness')?.qualityStatus ?? '',
+    gaps: findings.filter(x => x.validatorId === 'completeness.missing-timestamps').reduce((sum, x) => sum + (x.affectedCount ?? 1), 0),
+    duplicates: findings.filter(x => x.category === 'duplicates').reduce((sum, x) => sum + (x.affectedCount ?? 1), 0),
+    warnings: findings.filter(x => x.severity === 'warning' || x.qualityStatus === 'warning').length
+  };
+}
+
+function IngestionPanel({ schedules, jobs, executions, timeZone, onSave, onBackload }: { schedules: IngestionSchedule[]; jobs: IngestionJob[]; executions: IngestionExecution[]; timeZone: string; onSave: (schedule: IngestionSchedule) => Promise<void>; onBackload: (schedule: IngestionSchedule) => Promise<void> }) {
+  const rows = buildScheduleStatusRows(schedules, jobs, executions);
+  const [editing, setEditing] = useState<IngestionSchedule | null>(null);
+  return (
+    <section className="ingestion-panel">
+      <header className="section-heading">
+        <div><h2>Ingestion</h2><p>{schedules.length} schedules - {executions[0]?.inserted.toLocaleString() ?? 0} latest inserted</p></div>
+        {executions[0] && <StatusBadge status={executions[0].status} />}
+      </header>
+      <div className="table-scroll compact">
+        <table>
+          <thead><tr><th>Schedule</th><th>Latest result</th><th>Last queued</th><th>Rows</th><th></th></tr></thead>
+          <tbody>{rows.map(row => (
+            <tr key={row.id}>
+              <td><strong>{row.name}</strong><small>{row.detail}</small></td>
+              <td><StatusBadge status={row.displayStatus} /><small>{row.latestJob?.id ?? 'No jobs yet'}</small></td>
+              <td>{row.latestJob?.queuedAt ? formatDate(row.latestJob.queuedAt, timeZone) : 'Never'}</td>
+              <td>{row.displayExecution ? `${row.displayExecution.inserted.toLocaleString()} inserted - ${row.displayExecution.skipped.toLocaleString()} skipped` : ''}</td>
+              <td className="button-row">
+                <button className="table-action" onClick={() => setEditing(schedules.find(schedule => schedule.id === row.id) ?? null)}>Edit</button>
+                <button className="table-action" onClick={() => {
+                  const schedule = schedules.find(item => item.id === row.id);
+                  if (schedule) void onBackload(schedule);
+                }}>Backload</button>
+              </td>
+            </tr>
+          ))}</tbody>
+        </table>
+        {!rows.length && <p className="empty-state">No ingestion schedules for this series.</p>}
+      </div>
+      {editing && <ScheduleModal schedule={editing} onClose={() => setEditing(null)} onSave={async schedule => { await onSave(schedule); setEditing(null); }} />}
+      <div hidden>{buildScheduleJobHistoryRows('', jobs, executions).length}</div>
+    </section>
+  );
+}
+
+function ScheduleModal({ schedule, onClose, onSave }: { schedule: IngestionSchedule; onClose: () => void; onSave: (schedule: IngestionSchedule) => Promise<void> }) {
   const [draft, setDraft] = useState(schedule);
-  const cronChanged = draft.cronExpression !== draft.defaultCronExpression;
-  const granularity = datasets.find(dataset => dataset.endpoint === schedule.endpoint)?.granularity ?? '';
-  const suggestedCron = suggestCronFromGranularity(granularity);
-
+  const suggested = suggestCronFromGranularity(draft.parameters.timeframe ?? '');
   return (
     <div className="modal-backdrop" role="presentation" onClick={onClose}>
-      <div className="modal-panel form-modal" role="dialog" aria-modal="true" aria-labelledby="schedule-edit-title" onClick={event => event.stopPropagation()}>
-        <header className="modal-header">
-          <div>
-            <h3 id="schedule-edit-title">Edit schedule</h3>
-            <p>{schedule.name} · {schedule.endpoint}</p>
-          </div>
-          <button className="icon-button" type="button" onClick={onClose} aria-label="Close schedule editor">×</button>
-        </header>
-
+      <div className="modal-panel form-modal" role="dialog" aria-modal="true" onClick={event => event.stopPropagation()}>
+        <header className="modal-header"><div><h3>Edit ingestion</h3><p>{schedule.name}</p></div><button className="icon-button" onClick={onClose} aria-label="Close ingestion editor">x</button></header>
         <div className="form-grid">
-          <label className="switch-row">
-            <input type="checkbox" checked={draft.enabled} onChange={event => setDraft({ ...draft, enabled: event.target.checked })} />
-            <span>{draft.enabled ? 'Enabled' : 'Disabled'}</span>
-          </label>
-          <label>
-            <span>Cron</span>
-            <input value={draft.cronExpression} onChange={event => setDraft({ ...draft, cronExpression: event.target.value })} />
-            <small>{cronChanged ? `Default: ${draft.defaultCronExpression}` : 'Using default cadence'}</small>
-            {suggestedCron && <small>Granularity suggests {suggestedCron}</small>}
-          </label>
-          <label>
-            <span>Window start</span>
-            <input value={draft.windowStartExpression} onChange={event => setDraft({ ...draft, windowStartExpression: event.target.value })} />
-          </label>
-          <label>
-            <span>Window end</span>
-            <input value={draft.windowEndExpression} onChange={event => setDraft({ ...draft, windowEndExpression: event.target.value })} />
-          </label>
-          <label>
-            <span>Batch size</span>
-            <input type="number" min="1" value={draft.batchSize} onChange={event => setDraft({ ...draft, batchSize: Number(event.target.value) })} />
-          </label>
+          <label className="switch-row"><input type="checkbox" checked={draft.enabled} onChange={event => setDraft({ ...draft, enabled: event.target.checked })} /><span>{draft.enabled ? 'Enabled' : 'Disabled'}</span></label>
+          <label><span>Cron</span><input value={draft.cronExpression} onChange={event => setDraft({ ...draft, cronExpression: event.target.value })} />{suggested && <small>Timeframe suggests {suggested}</small>}</label>
+          <label><span>Window start</span><input value={draft.windowStartExpression} onChange={event => setDraft({ ...draft, windowStartExpression: event.target.value })} /></label>
+          <label><span>Window end</span><input value={draft.windowEndExpression} onChange={event => setDraft({ ...draft, windowEndExpression: event.target.value })} /></label>
+          <label><span>Batch size</span><input type="number" min="1" value={draft.batchSize} onChange={event => setDraft({ ...draft, batchSize: Number(event.target.value) })} /></label>
         </div>
-
-        <PresetButtons onPick={(startValue, endValue) => setDraft({ ...draft, windowStartExpression: startValue, windowEndExpression: endValue })} />
-
-        <footer className="modal-actions">
-          <button className="secondary" type="button" onClick={() => onReset(schedule.id)}>Reset to default</button>
-          <span className="muted">Default cron follows the seeded curve cadence.</span>
-          <button type="button" onClick={() => onSave(draft)}>Save</button>
-        </footer>
+        <footer className="modal-actions"><button className="secondary" onClick={onClose}>Cancel</button><button onClick={() => void onSave(draft)}>Save</button></footer>
       </div>
     </div>
   );
 }
 
-function BackloadModal({
-  schedule,
-  datasets,
-  onClose,
-  onCreate
-}: {
-  schedule: IngestionSchedule;
-  datasets: DatasetMetadata[];
-  onClose: () => void;
-  onCreate: (datasetId: string, windowStartExpression: string, windowEndExpression: string, batchSize: number) => Promise<void>;
-}) {
-  const defaultDataset = datasets.find(dataset => dataset.endpoint === schedule.endpoint) ?? datasets[0];
-  const [datasetId, setDatasetId] = useState(defaultDataset?.id ?? '');
-  const [windowStartExpression, setWindowStartExpression] = useState('today-1');
-  const [windowEndExpression, setWindowEndExpression] = useState('today');
-  const [batchSize, setBatchSize] = useState(schedule.batchSize);
-
+function PointTable({ points, currency, timeZone }: { points: TimeSeriesPoint[]; currency: string; timeZone: string }) {
   return (
-    <div className="modal-backdrop" role="presentation" onClick={onClose}>
-      <div className="modal-panel form-modal" role="dialog" aria-modal="true" aria-labelledby="backload-title" onClick={event => event.stopPropagation()}>
-        <header className="modal-header">
-          <div>
-            <h3 id="backload-title">Backload missed data</h3>
-            <p>{schedule.name} · queued once, then normal schedule continues</p>
-          </div>
-          <button className="icon-button" type="button" onClick={onClose} aria-label="Close backload">×</button>
-        </header>
-
-        <div className="form-grid">
-          <label className="wide">
-            <span>Dataset</span>
-            <select value={datasetId} onChange={event => setDatasetId(event.target.value)}>
-              {datasets.map(dataset => (
-                <option key={dataset.id} value={dataset.id}>
-                  {dataset.metric} · {dataset.endpoint} · {dataset.granularity || 'unknown cadence'}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            <span>Start</span>
-            <input value={windowStartExpression} onChange={event => setWindowStartExpression(event.target.value)} />
-          </label>
-          <label>
-            <span>End</span>
-            <input value={windowEndExpression} onChange={event => setWindowEndExpression(event.target.value)} />
-          </label>
-          <label>
-            <span>Batch size</span>
-            <input type="number" min="1" value={batchSize} onChange={event => setBatchSize(Number(event.target.value))} />
-          </label>
-        </div>
-
-        <PresetButtons onPick={(startValue, endValue) => {
-          setWindowStartExpression(startValue);
-          setWindowEndExpression(endValue);
-        }} />
-
-        <footer className="modal-actions">
-          <span className="muted">Use relative windows like today-1 to today or exact ISO timestamps.</span>
-          <button type="button" disabled={!datasetId} onClick={() => onCreate(datasetId, windowStartExpression, windowEndExpression, batchSize)}>Queue backload</button>
-        </footer>
+    <section className="table-panel">
+      <h2>{points.length} OHLCV bars</h2>
+      <div className="table-scroll">
+        <table>
+          <thead><tr><th>Timestamp</th><th>Open</th><th>High</th><th>Low</th><th>Close</th><th>Volume</th><th>As of</th></tr></thead>
+          <tbody>{points.slice(0, 200).map(point => (
+            <tr key={`${point.timestamp}-${point.asOf}`}>
+              <td>{formatDate(point.timestamp, timeZone)}</td>
+              <td>{formatMoney(point.open, currency)}</td>
+              <td>{formatMoney(point.high, currency)}</td>
+              <td>{formatMoney(point.low, currency)}</td>
+              <td>{formatMoney(point.close, currency)}</td>
+              <td>{formatNumber(point.volume)}</td>
+              <td>{formatDate(point.asOf, timeZone)}</td>
+            </tr>
+          ))}</tbody>
+        </table>
       </div>
-    </div>
-  );
-}
-
-function PresetButtons({ onPick }: { onPick: (startValue: string, endValue: string) => void }) {
-  const presets = [
-    ['Previous day', 'today-1', 'today'],
-    ['Last 48h', 'now-48h', 'now'],
-    ['Today + forecast', 'today', 'today+1']
-  ];
-
-  return (
-    <div className="preset-row">
-      {presets.map(([label, startValue, endValue]) => (
-        <button className="secondary" type="button" key={label} onClick={() => onPick(startValue, endValue)}>
-          {label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function ScheduleHistoryModal({
-  schedule,
-  rows,
-  timeZone,
-  onClose
-}: {
-  schedule: ScheduleStatusRow;
-  rows: ReturnType<typeof buildScheduleJobHistoryRows>;
-  timeZone: string;
-  onClose: () => void;
-}) {
-  return (
-    <div className="modal-backdrop" role="presentation" onClick={onClose}>
-      <div className="modal-panel" role="dialog" aria-modal="true" aria-labelledby="schedule-history-title" onClick={event => event.stopPropagation()}>
-        <header className="modal-header">
-          <div>
-            <h3 id="schedule-history-title">Schedule history</h3>
-            <p>{schedule.name} · {schedule.detail}</p>
-          </div>
-          <button className="icon-button" type="button" onClick={onClose} aria-label="Close history">×</button>
-        </header>
-
-        <div className="table-scroll compact">
-          <table>
-            <thead><tr><th>Job</th><th>Job status</th><th>Latest execution</th><th>Result</th></tr></thead>
-            <tbody>
-              {rows.map(row => (
-                <tr key={row.id} title={row.latestExecution?.error || row.job.error || row.id}>
-                  <td>
-                    <strong>{formatDate(row.job.queuedAt, timeZone)}</strong>
-                    <small>{row.job.id}</small>
-                  </td>
-                  <td><StatusBadge status={row.job.status} /></td>
-                  <td>
-                    {row.latestExecution ? <StatusBadge status={row.latestExecution.status} /> : <span className="muted">No execution</span>}
-                    <small>{row.latestExecution?.error || row.job.error || row.job.scheduleId}</small>
-                  </td>
-                  <td>{row.latestExecution ? `${row.latestExecution.inserted.toLocaleString()} inserted · ${row.latestExecution.skipped.toLocaleString()} skipped` : ''}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {!rows.length && <p className="empty-state">No jobs for this schedule yet.</p>}
-        </div>
-      </div>
-    </div>
+    </section>
   );
 }
 
@@ -1418,232 +602,31 @@ function StatusBadge({ status }: { status: string }) {
   return <span className={`status-badge ${status.toLowerCase()}`}>{status || 'unknown'}</span>;
 }
 
-function MetadataPanel({
-  dataset,
-  curve,
-  curveId,
-  datasetCount,
-  timeZone,
-  onSetDeprecated
-}: {
-  dataset: DatasetMetadata | null;
-  curve: CurveSummary | undefined;
-  curveId: string;
-  datasetCount: number;
-  timeZone: string;
-  onSetDeprecated: (dataset: DatasetMetadata, deprecated: boolean) => Promise<boolean>;
-}) {
-  if (!dataset) return <section className="metadata-panel"><h2>Curve details</h2><p>No curve selected.</p></section>;
-  const rows = [
-    ['Curve', curveId],
-    ['Datasets', datasetCount.toLocaleString()],
-    ['Providers', curve?.providers.join(', ') ?? ''],
-    ['Categories', curve?.categories.join(', ') ?? ''],
-    ['Series types', curve?.dataKinds.join(', ') ?? ''],
-    ['Selected dataset', dataset.id],
-    ['Provider', dataset.source],
-    ['Provider route', dataset.endpoint],
-    ['Metric', dataset.metric],
-    ['Series type', dataset.dataKind],
-    ['Category', dataset.category],
-    ['Unit', dataset.unit],
-    ['Country', dataset.country],
-    ['Bidding zone', dataset.biddingZone],
-    ['Region', dataset.region],
-    ['Granularity', dataset.granularity],
-    ['Production type', dataset.productionType],
-    ['Forecast type', dataset.forecastType],
-    ['Neighbor', dataset.neighbor],
-    ['Discontinued', dataset.deprecated ? 'yes' : 'no'],
-    ['Last ingested', formatDate(dataset.lastIngestedAt, timeZone)]
-  ].filter(([, value]) => value);
-
-  return (
-    <section className="metadata-panel">
-      <h2>Curve details</h2>
-      <dl>{rows.map(([label, value]) => <React.Fragment key={label}><dt>{label}</dt><dd>{value}</dd></React.Fragment>)}</dl>
-      <button type="button" onClick={() => void onSetDeprecated(dataset, !dataset.deprecated)}>
-        {dataset.deprecated ? 'Mark active' : 'Mark discontinued'}
-      </button>
-    </section>
-  );
-}
-
-function PointTable({ points, unit, timeZone }: { points: TimeSeriesPoint[]; unit: string; timeZone: string }) {
-  return (
-    <section className="table-panel">
-      <h2>{points.length} points</h2>
-      <div className="table-scroll">
-        <table>
-          <thead><tr><th>Timestamp</th><th>Value</th><th>As of</th></tr></thead>
-          <tbody>
-            {points.slice(0, 200).map(point => (
-              <tr key={`${point.timestamp}-${point.asOf}`}>
-                <td>{formatDate(point.timestamp, timeZone)}</td>
-                <td>{formatValue(point.value, unit)}</td>
-                <td>{formatDate(point.asOf, timeZone)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </section>
-  );
-}
-
-function buildChartData(points: TimeSeriesPoint[], unit: string, timeZone: string) {
-  const numeric = points.filter(point => point.value !== null);
-  if (numeric.length === 0) return { points: [], path: '', xTicks: [], yTicks: [] };
-
-  const values = numeric.map(point => point.value as number);
-  const rawMin = Math.min(...values);
-  const rawMax = Math.max(...values);
-  const padding = rawMin === rawMax ? Math.max(Math.abs(rawMin) * 0.1, 1) : 0;
-  const min = rawMin - padding;
-  const max = rawMax + padding;
-  const plotLeft = chartBounds.left + chartHorizontalPadding;
-  const plotRight = chartBounds.right - chartHorizontalPadding;
-  const width = plotRight - plotLeft;
-  const height = chartBounds.bottom - chartBounds.top;
-  const range = Math.max(max - min, 1);
-  const chartPoints = numeric.map((point, index) => {
-    const x = numeric.length === 1 ? plotLeft + width / 2 : plotLeft + (index * width) / (numeric.length - 1);
-    const y = chartBounds.bottom - (((point.value as number) - min) * height) / range;
-    return { x, y, point };
-  });
-
-  const yTicks = Array.from({ length: 5 }, (_, index) => {
-    const value = min + (range * index) / 4;
-    const y = chartBounds.bottom - ((value - min) * height) / range;
-    return { y, label: formatTickValue(value) };
-  }).reverse();
-  const xTicks = buildXTicks(chartPoints, timeZone);
-  const path = chartPoints.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ');
-
-  return { points: chartPoints, path, xTicks, yTicks };
-}
-
-function buildXTicks(points: ChartPoint[], timeZone: string): ChartTick[] {
-  const ticks = pickTicks(points, 4);
-  const first = new Date(points[0].point.timestamp).getTime();
-  const last = new Date(points[points.length - 1].point.timestamp).getTime();
-  return ticks.map((point, index) => ({
-    x: point.x,
-    label: formatChartTime(point.point.timestamp, last - first, timeZone),
-    anchor: index === 0 ? 'start' : index === ticks.length - 1 ? 'end' : 'middle'
-  }));
-}
-
-function pickTicks(points: ChartPoint[], maxTicks: number) {
-  if (points.length <= maxTicks) return points;
-  const step = (points.length - 1) / (maxTicks - 1);
-  return Array.from({ length: maxTicks }, (_, index) => points[Math.round(index * step)]);
-}
-
-function tooltipPosition(point: ChartPoint) {
-  const width = 238;
-  const height = 44;
-  const x = Math.min(Math.max(point.x + 12, 8), chartViewBox.width - width - 8);
-  const y = Math.min(Math.max(point.y - height - 12, 8), chartViewBox.height - height - 8);
-  return { x, y };
-}
-
-function tooltipTransform(point: ChartPoint) {
-  const position = tooltipPosition(point);
-  return `translate(${position.x} ${position.y})`;
-}
-
 function unique(values: string[]) {
   return Array.from(new Set(values.filter(Boolean))).sort();
 }
 
-function latestBy<T>(items: T[], key: (item: T) => string, date: (item: T) => string) {
-  const result = new Map<string, T>();
-  for (const item of items) {
-    const itemKey = key(item);
-    const previous = result.get(itemKey);
-    if (!previous || new Date(date(item)).getTime() > new Date(date(previous)).getTime()) {
-      result.set(itemKey, item);
-    }
-  }
-  return result;
-}
-
-function isSeedPlaceholder(dataset: DatasetMetadata) {
-  return dataset.metric === dataset.endpoint
-    && !dataset.productionType
-    && !dataset.forecastType
-    && !dataset.neighbor
-    && ['power', 'capacity', 'exchange', 'share', 'signal'].includes(dataset.category);
-}
-
 function formatDate(value: string, timeZone: string) {
-  return value ? new Intl.DateTimeFormat([], dateTimeFormat(timeZone)).format(new Date(value)) : '';
+  return value ? formatMarketTime(value, timeZone, 48 * 60 * 60 * 1000) : '';
 }
 
 function formatRange(start: string | null, end: string | null, timeZone: string) {
   if (!start && !end) return '';
-  if (!end) return formatDate(start ?? '', timeZone);
-  return `${formatDate(start ?? '', timeZone)} - ${formatDate(end, timeZone)}`;
+  return `${formatDate(start ?? '', timeZone)}${end ? ` - ${formatDate(end, timeZone)}` : ''}`;
 }
 
-function formatDuration(start: string | null, end: string | null) {
-  if (!start || !end) return '';
-  const milliseconds = new Date(end).getTime() - new Date(start).getTime();
-  if (!Number.isFinite(milliseconds) || milliseconds < 0) return '';
-  if (milliseconds < 1000) return `${milliseconds} ms`;
-  return `${(milliseconds / 1000).toFixed(1)} s`;
+function formatMoney(value: number, currency: string) {
+  return currency ? `${formatNumber(value)} ${currency}` : formatNumber(value);
 }
 
-function formatChartTime(value: string, rangeMs: number, timeZone: string) {
-  if (!value) return '';
-  const date = new Date(value);
-  const day = 24 * 60 * 60 * 1000;
-  if (rangeMs <= 2 * day) return new Intl.DateTimeFormat([], { timeZone, hour: '2-digit', minute: '2-digit' }).format(date);
-  if (rangeMs <= 14 * day) return new Intl.DateTimeFormat([], { timeZone, weekday: 'short', day: '2-digit' }).format(date);
-  if (rangeMs <= 120 * day) return new Intl.DateTimeFormat([], { timeZone, month: 'short', day: '2-digit' }).format(date);
-  return new Intl.DateTimeFormat([], { timeZone, month: 'short', year: '2-digit' }).format(date);
-}
-
-function formatTickValue(value: number) {
-  if (Number.isInteger(value)) return value.toFixed(0);
-  if (Number.isInteger(value * 10)) return value.toFixed(1);
-  return value.toFixed(2);
-}
-
-function formatValue(value: number | null, unit: string) {
-  if (value === null) return 'null';
-  const formatted = Math.abs(value) >= 100 ? value.toFixed(0) : value.toFixed(2);
-  return unit ? `${formatted} ${unit}` : formatted;
-}
-
-function equalsStatus(value: string, expected: string) {
-  return value.localeCompare(expected, undefined, { sensitivity: 'accent' }) === 0;
-}
-
-function toLocalInput(date: Date) {
-  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
-  return local.toISOString().slice(0, 16);
-}
-
-function dateTimeFormat(timeZone: string): Intl.DateTimeFormatOptions {
-  return {
-    timeZone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit'
-  };
+function formatNumber(value: number) {
+  if (Math.abs(value) >= 1000) return value.toFixed(0);
+  if (Math.abs(value) >= 1) return value.toFixed(2);
+  return value.toPrecision(4);
 }
 
 function toPickerInput(value: string) {
   return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value) ? value : '';
-}
-
-function formatTimeZoneLabel(value: string) {
-  if (value === 'Europe/Copenhagen') return 'CET/CEST (Europe/Copenhagen)';
-  return value === defaultTimeZone ? `${value} (local)` : value;
 }
 
 createRoot(document.getElementById('root')!).render(<App />);
