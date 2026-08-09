@@ -38,7 +38,7 @@ public class DataQualityControllerTests
             null,
             null,
             null,
-            [new UpsertQualityValidationJobTargetRequest("dataset", "dataset-1", null)],
+            [new UpsertQualityValidationJobTargetRequest("series", "coinbase:eth-usd:ohlcv:15m", null)],
             [new UpsertQualityValidationJobCheckRequest(null, "unknown.validator", null, true, null, null, null)]);
 
         var qualityRepository = new Mock<IQualityRepository>();
@@ -121,6 +121,36 @@ public class DataQualityControllerTests
             && message.WindowEndExpression == "2026-01-01T11:00:00Z"), CancellationToken.None), Times.Once);
     }
 
+    [Fact]
+    public async Task Jobs_FiltersByMarketSeries()
+    {
+        var qualityRepository = new Mock<IQualityRepository>();
+        qualityRepository.Setup(x => x.GetJobsAsync(CancellationToken.None))
+            .ReturnsAsync([
+                Job("job-1", "coinbase:eth-usd:ohlcv:15m"),
+                Job("job-2", "coinbase:btc-usd:ohlcv:15m")
+            ]);
+
+        var result = await Controller(qualityRepository.Object).Jobs("coinbase:eth-usd:ohlcv:15m", CancellationToken.None);
+
+        var jobs = Assert.IsType<List<QualityValidationJobDto>>(Assert.IsType<OkObjectResult>(result).Value);
+        Assert.Single(jobs);
+        Assert.Equal("job-1", jobs[0].Id);
+    }
+
+    [Fact]
+    public async Task Executions_ReturnsSeriesHistory()
+    {
+        var qualityRepository = new Mock<IQualityRepository>();
+        qualityRepository.Setup(x => x.GetExecutionsAsync(null, "coinbase:eth-usd:ohlcv:15m", CancellationToken.None))
+            .ReturnsAsync([new QualityExecutionDto("execution-1", "job-1", "manual", QualityExecutionStatuses.Completed, DateTimeOffset.UtcNow, null, null, null, null, 1, 1, 0, 0, 0, "")]);
+
+        var result = await Controller(qualityRepository.Object).Executions(null, "coinbase:eth-usd:ohlcv:15m", CancellationToken.None);
+
+        var executions = Assert.IsType<List<QualityExecutionDto>>(Assert.IsType<OkObjectResult>(result).Value);
+        Assert.Single(executions);
+    }
+
     private static DataQualityController Controller(
         IQualityRepository? qualityRepository = null,
         IValidationJobPublisher? publisher = null) =>
@@ -130,6 +160,25 @@ public class DataQualityControllerTests
     private static List<QualityValidatorTypeDto> Validators() =>
     [
         new("completeness.missing-timestamps", "completeness", "Missing timestamps", "", "series", 1, "warning", JsonSerializer.SerializeToElement(new { })),
-        new("freshness.latest-point", "freshness", "Latest point freshness", "", "series", 1, "critical", JsonSerializer.SerializeToElement(new { }))
+        new("freshness.latest-point", "freshness", "Latest point freshness", "", "series", 1, "critical", JsonSerializer.SerializeToElement(new { })),
+        new("validity.price-positive", "value_validity", "Positive OHLC prices", "", "series", 1, "critical", JsonSerializer.SerializeToElement(new { }))
     ];
+
+    private static QualityValidationJobDto Job(string id, string seriesId) => new(
+        id,
+        "Job",
+        "",
+        true,
+        "*/15 * * * *",
+        "UTC",
+        "now-2h",
+        "now",
+        4,
+        300,
+        JsonSerializer.SerializeToElement(new { }),
+        [new QualityValidationJobTargetDto("series", seriesId, JsonSerializer.SerializeToElement(new { }))],
+        [new QualityValidationJobCheckDto("check-1", "completeness.missing-timestamps", 1, true, JsonSerializer.SerializeToElement(new { }), JsonSerializer.SerializeToElement(new { }), 0)],
+        DateTimeOffset.UtcNow,
+        DateTimeOffset.UtcNow,
+        null);
 }

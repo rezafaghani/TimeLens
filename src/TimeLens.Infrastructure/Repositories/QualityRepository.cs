@@ -217,6 +217,58 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
         return (await ReadJobs(reader, cancellationToken)).SingleOrDefault();
     }
 
+    public async Task<List<QualityExecutionDto>> GetExecutionsAsync(string? jobId, string? seriesId, CancellationToken cancellationToken = default)
+    {
+        await using var command = context.Postgres.CreateCommand();
+        var clauses = new List<string>();
+        AddFilter(command, clauses, "e.job_id", "job_id", jobId);
+        if (!string.IsNullOrWhiteSpace(seriesId))
+        {
+            clauses.Add("""
+                EXISTS (
+                    SELECT 1
+                    FROM quality_validation_target_executions t
+                    WHERE t.execution_id = e.id AND t.series_id = @series_id
+                )
+                """);
+            command.Parameters.AddWithValue("series_id", seriesId);
+        }
+
+        command.CommandText = $"""
+            SELECT e.id, e.job_id, e.trigger_type, e.status, e.queued_at, e.started_at, e.finished_at,
+                   e.evaluated_start, e.evaluated_end, e.target_count, e.completed_count, e.warning_count,
+                   e.critical_count, e.technical_failure_count, e.error
+            FROM quality_validation_executions e
+            {(clauses.Count == 0 ? "" : $"WHERE {string.Join(" AND ", clauses)}")}
+            ORDER BY e.queued_at DESC
+            LIMIT 200
+            """;
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var result = new List<QualityExecutionDto>();
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            result.Add(new QualityExecutionDto(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.GetFieldValue<DateTimeOffset>(4),
+                reader.IsDBNull(5) ? null : reader.GetFieldValue<DateTimeOffset>(5),
+                reader.IsDBNull(6) ? null : reader.GetFieldValue<DateTimeOffset>(6),
+                reader.IsDBNull(7) ? null : reader.GetFieldValue<DateTimeOffset>(7),
+                reader.IsDBNull(8) ? null : reader.GetFieldValue<DateTimeOffset>(8),
+                reader.GetInt32(9),
+                reader.GetInt32(10),
+                reader.GetInt32(11),
+                reader.GetInt32(12),
+                reader.GetInt32(13),
+                reader.GetString(14)));
+        }
+
+        return result;
+    }
+
     public async Task<QualityValidationJobDto> UpsertJobAsync(UpsertQualityValidationJobRequest request, CancellationToken cancellationToken = default)
     {
         var id = string.IsNullOrWhiteSpace(request.Id) ? $"quality-job-{Guid.NewGuid():N}" : request.Id;
@@ -682,6 +734,17 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
 
         clauses.Add($"{column} = @{column}");
         command.Parameters.AddWithValue(column, value);
+    }
+
+    private static void AddFilter(NpgsqlCommand command, List<string> clauses, string column, string parameter, string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return;
+        }
+
+        clauses.Add($"{column} = @{parameter}");
+        command.Parameters.AddWithValue(parameter, value);
     }
 
     private static void AddJson(NpgsqlCommand command, string name, JsonElement? value)

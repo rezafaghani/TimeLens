@@ -165,6 +165,7 @@ public class QualityValidationEngineTests
             .ToHashSet();
 
         Assert.Contains("timelens.validation.validity.ohlc-consistency", pluginIds);
+        Assert.Contains("timelens.validation.validity.price-positive", pluginIds);
         Assert.Contains("timelens.validation.validity.volume", pluginIds);
         Assert.Contains("timelens.validation.anomaly.price-spike", pluginIds);
         Assert.Contains("timelens.validation.anomaly.volume-spike", pluginIds);

@@ -14,6 +14,7 @@ public interface IQualityRepository
     Task<List<QualityValidationJobDto>> GetJobsAsync(CancellationToken cancellationToken = default);
     Task<List<QualityValidationJobDto>> GetEnabledJobsAsync(CancellationToken cancellationToken = default);
     Task<QualityValidationJobDto?> GetJobAsync(string id, CancellationToken cancellationToken = default);
+    Task<List<QualityExecutionDto>> GetExecutionsAsync(string? jobId, string? seriesId, CancellationToken cancellationToken = default);
     Task<QualityValidationJobDto> UpsertJobAsync(UpsertQualityValidationJobRequest request, CancellationToken cancellationToken = default);
     Task<QualityValidationJobDto?> SetJobEnabledAsync(string id, bool enabled, CancellationToken cancellationToken = default);
     Task MarkJobQueuedAsync(string id, DateTimeOffset queuedAt, CancellationToken cancellationToken = default);

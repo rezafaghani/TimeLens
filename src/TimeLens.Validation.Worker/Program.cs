@@ -3,6 +3,7 @@ using TimeLens.Domain.Models;
 using TimeLens.Domain.Services;
 using TimeLens.Infrastructure;
 using TimeLens.Infrastructure.Repositories;
+using TimeLens.Infrastructure.Services;
 using TimeLens.Validation;
 using TimeLens.Validation.Worker;
 
@@ -18,6 +19,7 @@ builder.Services.AddSingleton<TimeLensContext>(sp =>
 });
 builder.Services.AddScoped<IDatasetRepository, DatasetRepository>();
 builder.Services.AddScoped<ITimeSeriesRepository, TimeSeriesRepository>();
+builder.Services.AddScoped<IMarketDataReader, MarketDataReader>();
 builder.Services.AddScoped<IQualityRepository, QualityRepository>();
 builder.Services.AddScoped<ValidationExecutionService>();
 foreach (var pluginType in typeof(QualityValidationEngine).Assembly.GetTypes()
@@ -101,11 +103,11 @@ app.MapPost("/validation/jobs/{id}/runs", async (
 
     try
     {
-        var datasetIds = await ResolveTargetDatasetIds(job, qualityRepository, cancellationToken);
+        var targetIds = await ResolveTargetIds(job, qualityRepository, cancellationToken);
         var results = new List<ManualQualityEvaluationResult>();
-        foreach (var datasetId in datasetIds)
+        foreach (var targetId in targetIds)
         {
-            var result = await validation.EvaluateDatasetAsync(datasetId, start, end, null, job.TimeZone, validatorIds, cancellationToken);
+            var result = await validation.EvaluateDatasetAsync(targetId, start, end, null, job.TimeZone, validatorIds, cancellationToken);
             if (result is not null)
             {
                 results.Add(result);
@@ -115,7 +117,7 @@ app.MapPost("/validation/jobs/{id}/runs", async (
         return Results.Ok(new RunQualityJobResult(
             job.Id,
             string.IsNullOrWhiteSpace(request.TriggerType) ? "manual" : request.TriggerType,
-            datasetIds.Count,
+            targetIds.Count,
             results.Count,
             results.Sum(x => x.Findings.Count),
             results.Sum(x => x.Findings.Count(finding => finding.Severity == "critical")),
@@ -129,12 +131,12 @@ app.MapPost("/validation/jobs/{id}/runs", async (
 
 app.Run();
 
-static async Task<List<string>> ResolveTargetDatasetIds(QualityValidationJobDto job, IQualityRepository qualityRepository, CancellationToken cancellationToken)
+static async Task<List<string>> ResolveTargetIds(QualityValidationJobDto job, IQualityRepository qualityRepository, CancellationToken cancellationToken)
 {
     var ids = new List<string>();
     foreach (var target in job.Targets)
     {
-        if (target.TargetType == "dataset")
+        if (target.TargetType == "dataset" || target.TargetType == "series")
         {
             ids.Add(target.TargetId);
         }

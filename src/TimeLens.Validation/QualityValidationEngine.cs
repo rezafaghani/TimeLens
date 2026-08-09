@@ -155,7 +155,7 @@ public abstract class QualityValidationPlugin(
         description,
         ExecutionCategories.Validation,
         1,
-        ["dataset"],
+        ["dataset", "series"],
         [],
         [],
         JsonSerializer.SerializeToElement(defaultConfiguration, QualityValidationEngine.JsonOptions),
@@ -496,6 +496,41 @@ public sealed class VolumeValidationPlugin() : QualityValidationPlugin(
                 "Volume is invalid",
                 $"{invalid.Count} volume values violate the configured constraint. Example: {invalid[0].Timestamp:O} volume observed {invalid[0].Observed}, expected {invalid[0].Expected}.",
                 invalid.First().Timestamp, invalid.Last().Timestamp, affectedCount: invalid.Count, samples: invalid.Select(x => x.Timestamp).Take(20),
+                details: JsonSerializer.SerializeToElement(invalid.Take(50), QualityValidationEngine.JsonOptions))
+        ];
+    }
+}
+
+public sealed class PricePositiveValidationPlugin() : QualityValidationPlugin(
+    "validity.price-positive",
+    "value_validity",
+    "Positive OHLC prices",
+    "Checks that OHLC prices are positive for market-data bars.",
+    "critical",
+    new { severity = "critical" })
+{
+    internal override List<QualityFindingDraftDto> Evaluate(ExecutionPluginContext context, QualityEvaluationRequest request)
+    {
+        if (!request.Metadata.MarketDataType.Equals("ohlcv", StringComparison.OrdinalIgnoreCase))
+        {
+            return [];
+        }
+
+        var invalid = new List<(DateTimeOffset Timestamp, string Field, double Observed, string Expected)>();
+        foreach (var point in Points(request).Where(x => x.Timestamp >= request.Start && x.Timestamp < request.End))
+        {
+            if (point.Open <= 0) invalid.Add((point.Timestamp, "open", point.Open, "> 0"));
+            if (point.High <= 0) invalid.Add((point.Timestamp, "high", point.High, "> 0"));
+            if (point.Low <= 0) invalid.Add((point.Timestamp, "low", point.Low, "> 0"));
+            if (point.Close <= 0) invalid.Add((point.Timestamp, "close", point.Close, "> 0"));
+        }
+
+        return invalid.Count == 0 ? [] :
+        [
+            QualityValidationEngine.Finding("validity.price-positive", "value_validity", "critical", QualityStatuses.Critical,
+                "OHLC prices are not positive",
+                $"{invalid.Count} OHLC price values are not positive. Example: {invalid[0].Timestamp:O} {invalid[0].Field} observed {invalid[0].Observed}, expected {invalid[0].Expected}.",
+                invalid.Min(x => x.Timestamp), invalid.Max(x => x.Timestamp), affectedCount: invalid.Count, samples: invalid.Select(x => x.Timestamp).Distinct().Take(20),
                 details: JsonSerializer.SerializeToElement(invalid.Take(50), QualityValidationEngine.JsonOptions))
         ];
     }

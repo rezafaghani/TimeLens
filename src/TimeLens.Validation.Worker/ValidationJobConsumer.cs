@@ -93,8 +93,7 @@ public class ValidationJobConsumer(
     {
         using var scope = scopeFactory.CreateScope();
         var qualityRepository = scope.ServiceProvider.GetRequiredService<IQualityRepository>();
-        var datasetRepository = scope.ServiceProvider.GetRequiredService<IDatasetRepository>();
-        var timeSeriesRepository = scope.ServiceProvider.GetRequiredService<ITimeSeriesRepository>();
+        var marketDataReader = scope.ServiceProvider.GetRequiredService<IMarketDataReader>();
         var job = await qualityRepository.GetJobAsync(message.JobId, cancellationToken)
             ?? throw new ArgumentException($"Validation job '{message.JobId}' was not found.");
 
@@ -105,17 +104,16 @@ public class ValidationJobConsumer(
             throw new ArgumentException("A valid half-open evaluation window is required.");
         }
 
-        var datasetIds = await ResolveTargetDatasetIds(job, qualityRepository, cancellationToken);
-        for (var datasetIndex = 0; datasetIndex < datasetIds.Count; datasetIndex++)
+        var targets = await ResolveTargets(job, qualityRepository, cancellationToken);
+        for (var targetIndex = 0; targetIndex < targets.Count; targetIndex++)
         {
-            var datasetId = datasetIds[datasetIndex];
-            var metadata = await datasetRepository.GetAsync(datasetId, cancellationToken);
-            if (metadata is null)
+            var target = targets[targetIndex];
+            var marketData = await marketDataReader.ReadAsync(target.TargetType, target.TargetId, start, end, null, cancellationToken);
+            if (marketData is null)
             {
                 continue;
             }
 
-            var points = await timeSeriesRepository.GetSeriesAsync(datasetId, start, end, null, cancellationToken, 10000);
             var findings = new List<QualityFindingDraftDto>();
             foreach (var check in job.Checks.Where(x => x.Enabled).OrderBy(x => x.SortOrder))
             {
@@ -126,8 +124,8 @@ public class ValidationJobConsumer(
                     ExecutionId = message.ExecutionId,
                     ValidatorId = check.ValidatorId,
                     ValidatorVersion = check.ValidatorVersion,
-                    TargetType = "dataset",
-                    TargetId = datasetId,
+                    TargetType = target.TargetType,
+                    TargetId = target.TargetId,
                     Start = start,
                     End = end,
                     Configuration = check.Configuration
@@ -139,37 +137,37 @@ public class ValidationJobConsumer(
             }
 
             await qualityRepository.SaveJobEvaluationAsync(
-                datasetIds.Count == 1 ? message.ExecutionId : $"{message.ExecutionId}-{datasetIndex + 1}",
+                targets.Count == 1 ? message.ExecutionId : $"{message.ExecutionId}-{targetIndex + 1}",
                 job.Id,
                 message.TriggerType,
                 new ManualQualityEvaluationResult(
-                metadata,
+                marketData.Metadata,
                 start,
                 end,
-                points.Count,
+                marketData.Points.Count,
                 OverallStatus(findings),
                 findings),
                 cancellationToken);
         }
     }
 
-    private static async Task<List<string>> ResolveTargetDatasetIds(QualityValidationJobDto job, IQualityRepository qualityRepository, CancellationToken cancellationToken)
+    private static async Task<List<QualityValidationJobTargetDto>> ResolveTargets(QualityValidationJobDto job, IQualityRepository qualityRepository, CancellationToken cancellationToken)
     {
-        var ids = new List<string>();
+        var targets = new List<QualityValidationJobTargetDto>();
         foreach (var target in job.Targets)
         {
-            if (target.TargetType == "dataset")
+            if (target.TargetType == "dataset" || target.TargetType == "series")
             {
-                ids.Add(target.TargetId);
+                targets.Add(target);
             }
             else if (target.TargetType == "group")
             {
                 var members = await qualityRepository.GetSeriesGroupMembersAsync(target.TargetId, cancellationToken);
-                ids.AddRange(members.Select(x => x.DatasetId));
+                targets.AddRange(members.Select(x => new QualityValidationJobTargetDto("series", x.SeriesId, target.Rule)));
             }
         }
 
-        return ids.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        return targets.DistinctBy(x => $"{x.TargetType}:{x.TargetId}", StringComparer.OrdinalIgnoreCase).ToList();
     }
 
     private static string OverallStatus(List<QualityFindingDraftDto> findings)
@@ -179,6 +177,6 @@ public class ValidationJobConsumer(
             return QualityStatuses.Critical;
         }
 
-        return findings.Count == 0 ? QualityStatuses.Healthy : QualityStatuses.Degraded;
+        return findings.Count == 0 ? QualityStatuses.Healthy : QualityStatuses.Warning;
     }
 }
