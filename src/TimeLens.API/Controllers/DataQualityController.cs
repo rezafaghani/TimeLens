@@ -61,9 +61,20 @@ public class DataQualityController(
 
     [HttpGet("jobs")]
     [ProducesResponseType(typeof(List<QualityValidationJobDto>), StatusCodes.Status200OK)]
-    public async Task<IActionResult> Jobs(CancellationToken cancellationToken)
+    public async Task<IActionResult> Jobs([FromQuery] string? seriesId, CancellationToken cancellationToken)
     {
-        return Ok(await qualityRepository.GetJobsAsync(cancellationToken));
+        var jobs = await qualityRepository.GetJobsAsync(cancellationToken);
+        if (!string.IsNullOrWhiteSpace(seriesId))
+        {
+            jobs = jobs
+                .Where(job => job.Targets.Any(target =>
+                    (target.TargetType.Equals("series", StringComparison.OrdinalIgnoreCase)
+                        || target.TargetType.Equals("dataset", StringComparison.OrdinalIgnoreCase))
+                    && target.TargetId.Equals(seriesId, StringComparison.OrdinalIgnoreCase)))
+                .ToList();
+        }
+
+        return Ok(jobs);
     }
 
     [HttpGet("jobs/{id}")]
@@ -156,6 +167,16 @@ public class DataQualityController(
         CancellationToken cancellationToken = default)
     {
         return Ok(await qualityRepository.GetFindingsAsync(datasetId, seriesId, activeOnly, cancellationToken));
+    }
+
+    [HttpGet("executions")]
+    [ProducesResponseType(typeof(List<QualityExecutionDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> Executions(
+        [FromQuery] string? jobId,
+        [FromQuery] string? seriesId,
+        CancellationToken cancellationToken = default)
+    {
+        return Ok(await qualityRepository.GetExecutionsAsync(jobId, seriesId, cancellationToken));
     }
 
     [HttpGet("status")]

@@ -67,7 +67,7 @@ public class ExecutionControllerTests
                 null));
         var controller = new ExecutionController(
             new ExecutionPluginRegistry([new FakeValidationPlugin()]),
-            new ExecutionRuntime(new ExecutionPluginRegistry([new FakeValidationPlugin()]), Mock.Of<IDatasetRepository>(), Mock.Of<ITimeSeriesRepository>()),
+            new ExecutionRuntime(new ExecutionPluginRegistry([new FakeValidationPlugin()]), Mock.Of<IMarketDataReader>()),
             repository.Object);
         var request = new UpsertExecutionDefinitionRequest(
             null,
@@ -97,8 +97,7 @@ public class ExecutionControllerTests
         new(new ExecutionPluginRegistry(Plugins()),
             new ExecutionRuntime(
                 new ExecutionPluginRegistry(Plugins()),
-                Mock.Of<IDatasetRepository>(),
-                Mock.Of<ITimeSeriesRepository>()),
+                Mock.Of<IMarketDataReader>()),
             Mock.Of<IExecutionRepository>());
 
     private static List<IExecutionPlugin> Plugins() => [];

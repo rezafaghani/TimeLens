@@ -27,6 +27,7 @@ internal static class Extensions
         });
         services.AddScoped<IDatasetRepository, DatasetRepository>();
         services.AddScoped<ITimeSeriesRepository, TimeSeriesRepository>();
+        services.AddScoped<IMarketDataReader, MarketDataReader>();
         services.AddScoped<IIngestionControlRepository, IngestionControlRepository>();
         services.AddScoped<IExecutionRepository, ExecutionRepository>();
         services.AddScoped<IQualityRepository, QualityRepository>();

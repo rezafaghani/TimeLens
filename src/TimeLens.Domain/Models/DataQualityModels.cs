@@ -184,6 +184,23 @@ public record QualityStatusDto(
     string LatestExecutionId,
     DateTimeOffset AsOf);
 
+public record QualityExecutionDto(
+    string Id,
+    string JobId,
+    string TriggerType,
+    string Status,
+    DateTimeOffset QueuedAt,
+    DateTimeOffset? StartedAt,
+    DateTimeOffset? FinishedAt,
+    DateTimeOffset? EvaluatedStart,
+    DateTimeOffset? EvaluatedEnd,
+    int TargetCount,
+    int CompletedCount,
+    int WarningCount,
+    int CriticalCount,
+    int TechnicalFailureCount,
+    string Error);
+
 public record QualitySummaryDto(
     int Healthy,
     int Degraded,

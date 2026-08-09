@@ -1,4 +1,5 @@
 using System.Text.Json;
+using TimeLens.Domain.Interfaces;
 using TimeLens.Domain.Models;
 using TimeLens.Domain.Services;
 
@@ -6,8 +7,7 @@ namespace TimeLens.API.Infrastructure.Services;
 
 public class ExecutionRuntime(
     ExecutionPluginRegistry registry,
-    IDatasetRepository datasetRepository,
-    ITimeSeriesRepository timeSeriesRepository)
+    IMarketDataReader marketDataReader)
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
@@ -49,15 +49,15 @@ public class ExecutionRuntime(
         DateTimeOffset end,
         CancellationToken cancellationToken)
     {
-        if (!target.TargetType.Equals("dataset", StringComparison.OrdinalIgnoreCase))
+        if (!target.TargetType.Equals("dataset", StringComparison.OrdinalIgnoreCase)
+            && !target.TargetType.Equals("series", StringComparison.OrdinalIgnoreCase))
         {
             return new ExecutionPluginContext(target.TargetType, target.TargetId, start, end, EmptyJson(), null, []);
         }
 
-        var metadata = await datasetRepository.GetAsync(target.TargetId, cancellationToken)
-            ?? throw new ArgumentException($"Dataset '{target.TargetId}' was not found.");
-        var points = await timeSeriesRepository.GetSeriesAsync(target.TargetId, start, end, null, cancellationToken);
-        return new ExecutionPluginContext(target.TargetType, target.TargetId, start, end, EmptyJson(), metadata, points);
+        var marketData = await marketDataReader.ReadAsync(target.TargetType, target.TargetId, start, end, null, cancellationToken)
+            ?? throw new ArgumentException($"Market-data series '{target.TargetId}' was not found.");
+        return new ExecutionPluginContext(target.TargetType, target.TargetId, start, end, EmptyJson(), marketData.Metadata, marketData.Points);
     }
 
     private static JsonElement EmptyJson() => JsonSerializer.SerializeToElement(new { }, JsonOptions);

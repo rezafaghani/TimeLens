@@ -50,6 +50,31 @@ interface QualityStatus {
   asOf: string;
 }
 
+interface QualityValidationJob {
+  id: string;
+  name: string;
+  enabled: boolean;
+  cronExpression: string;
+  windowStartExpression: string;
+  windowEndExpression: string;
+  targets: { targetType: string; targetId: string }[];
+  checks: { validatorId: string; enabled: boolean }[];
+  lastQueuedAt: string | null;
+}
+
+interface QualityExecution {
+  id: string;
+  jobId: string;
+  triggerType: string;
+  status: string;
+  queuedAt: string;
+  evaluatedStart: string | null;
+  evaluatedEnd: string | null;
+  warningCount: number;
+  criticalCount: number;
+  error: string;
+}
+
 const apiBase = import.meta.env.VITE_API_BASE_URL ?? '/api';
 const defaultTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 
@@ -63,6 +88,8 @@ function App() {
   const [executions, setExecutions] = useState<IngestionExecution[]>([]);
   const [findings, setFindings] = useState<QualityFinding[]>([]);
   const [qualityStatus, setQualityStatus] = useState<QualityStatus | null>(null);
+  const [validationJobs, setValidationJobs] = useState<QualityValidationJob[]>([]);
+  const [validationExecutions, setValidationExecutions] = useState<QualityExecution[]>([]);
   const [search, setSearch] = useState('');
   const [provider, setProvider] = useState('');
   const [assetClass, setAssetClass] = useState('');
@@ -204,12 +231,16 @@ function App() {
   async function loadQuality(item = selected) {
     if (!item) return;
     const id = encodeURIComponent(item.seriesId || item.id);
-    const [findingsResponse, statusResponse] = await Promise.all([
+    const [findingsResponse, statusResponse, jobsResponse, executionsResponse] = await Promise.all([
       fetch(`${apiBase}/data-quality/findings?seriesId=${id}&activeOnly=true`),
-      fetch(`${apiBase}/data-quality/status?seriesId=${id}`)
+      fetch(`${apiBase}/data-quality/status?seriesId=${id}`),
+      fetch(`${apiBase}/data-quality/jobs?seriesId=${id}`),
+      fetch(`${apiBase}/data-quality/executions?seriesId=${id}`)
     ]);
     setFindings(findingsResponse.ok ? await findingsResponse.json() as QualityFinding[] : []);
     setQualityStatus(statusResponse.ok ? await statusResponse.json() as QualityStatus : null);
+    setValidationJobs(jobsResponse.ok ? await jobsResponse.json() as QualityValidationJob[] : []);
+    setValidationExecutions(executionsResponse.ok ? await executionsResponse.json() as QualityExecution[] : []);
   }
 
   async function saveSchedule(schedule: IngestionSchedule) {
@@ -246,6 +277,75 @@ function App() {
     await loadIngestionStatus(selected.seriesId);
   }
 
+  async function createStandardValidation() {
+    if (!selected) return;
+    const checks = [
+      ['completeness.missing-timestamps', { granularity: isoDurationForTimeframe(selected.timeframe) }],
+      ['timestamps.alignment', { granularity: isoDurationForTimeframe(selected.timeframe) }],
+      ['freshness.latest-point', { gracePeriod: isoDurationForTimeframe(selected.timeframe) }],
+      ['validity.ohlc-consistency', { requirePositivePrices: false }],
+      ['validity.price-positive', {}],
+      ['validity.volume', { allowZeroVolume: true }]
+    ] as const;
+    const response = await fetch(`${apiBase}/data-quality/jobs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: `Standard OHLCV Quality - ${selected.symbol} ${selected.timeframe}`,
+        description: `Standard OHLCV quality checks for ${selected.provider} ${selected.symbol} ${selected.timeframe}.`,
+        enabled: true,
+        cronExpression: suggestCronFromGranularity(selected.timeframe) || '*/15 * * * *',
+        timeZone: selected.timeZone || 'UTC',
+        windowStartExpression: 'now-2h',
+        windowEndExpression: 'now',
+        targets: [{ targetType: 'series', targetId: selected.seriesId || selected.id }],
+        checks: checks.map(([validatorId, configuration], sortOrder) => ({
+          validatorId,
+          enabled: true,
+          configuration,
+          sortOrder
+        }))
+      })
+    });
+    if (!response.ok) {
+      setError(await response.text() || 'Unable to configure validation.');
+      return;
+    }
+    await loadQuality(selected);
+  }
+
+  async function runValidation(job: QualityValidationJob, range?: { start: string; end: string }) {
+    if (!selected) return;
+    const response = await fetch(`${apiBase}/data-quality/jobs/${encodeURIComponent(job.id)}/runs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        start: range?.start,
+        end: range?.end,
+        triggerType: range ? 'backfill' : 'manual'
+      })
+    });
+    if (!response.ok) {
+      setError(await response.text() || 'Unable to run validation.');
+      return;
+    }
+    await loadQuality(selected);
+  }
+
+  async function setValidationEnabled(job: QualityValidationJob, enabled: boolean) {
+    if (!selected) return;
+    const response = await fetch(`${apiBase}/data-quality/jobs/${encodeURIComponent(job.id)}/enabled`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled })
+    });
+    if (!response.ok) {
+      setError(await response.text() || 'Unable to update validation.');
+      return;
+    }
+    await loadQuality(selected);
+  }
+
   function selectInstrument(instrument: InstrumentSummary) {
     const next = instrument.series[0] as DatasetMetadata | undefined;
     setSelectedInstrumentId(instrument.id);
@@ -253,6 +353,8 @@ function App() {
     setPoints([]);
     setFindings([]);
     setQualityStatus(null);
+    setValidationJobs([]);
+    setValidationExecutions([]);
     setLiveEnabled(false);
     if (next) void Promise.all([loadBars(next), loadIngestionStatus(next.seriesId), loadQuality(next)]);
   }
@@ -260,6 +362,8 @@ function App() {
   function selectSeries(item: DatasetMetadata) {
     setSelected(item);
     setPoints([]);
+    setValidationJobs([]);
+    setValidationExecutions([]);
     setLiveEnabled(false);
     void Promise.all([loadBars(item), loadIngestionStatus(item.seriesId), loadQuality(item)]);
   }
@@ -367,7 +471,18 @@ function App() {
         {error && <div className="error">{error}</div>}
 
         <MetadataPanel item={selected} instrument={selectedInstrument} timeZone={timeZone} onSelectSeries={selectSeries} />
-        <QualityPanel status={qualityStatus} findings={findings} timeZone={timeZone} onRefresh={() => void loadQuality()} />
+        <QualityPanel
+          status={qualityStatus}
+          findings={findings}
+          jobs={validationJobs}
+          executions={validationExecutions}
+          timeZone={timeZone}
+          onRefresh={() => void loadQuality()}
+          onConfigure={() => void createStandardValidation()}
+          onRun={job => void runValidation(job)}
+          onBackfill={(job, range) => void runValidation(job, range)}
+          onSetEnabled={(job, enabled) => void setValidationEnabled(job, enabled)}
+        />
         <IngestionPanel schedules={schedules} jobs={jobs} executions={executions} timeZone={timeZone} onSave={saveSchedule} onBackload={queueBackload} />
 
         <MarketChart
@@ -401,6 +516,15 @@ function toSubscription(item: DatasetMetadata): MarketDataSubscription {
 
 function rangeLabel(preset: RangePreset) {
   return preset === 'previous-day' ? '-1D' : preset === 'next-day' ? '+1D' : preset === 'today' ? 'Today' : preset;
+}
+
+function isoDurationForTimeframe(timeframe: string) {
+  return timeframe === '1m' ? 'PT1M'
+    : timeframe === '5m' ? 'PT5M'
+    : timeframe === '15m' ? 'PT15M'
+    : timeframe === '1h' ? 'PT1H'
+    : timeframe === '1d' ? 'P1D'
+    : 'PT15M';
 }
 
 function pointToEvent(item: DatasetMetadata, point: TimeSeriesPoint): MarketDataUpdatedEvent {
@@ -470,23 +594,70 @@ function MetadataPanel({ item, instrument, timeZone, onSelectSeries }: { item: D
   );
 }
 
-function QualityPanel({ status, findings, timeZone, onRefresh }: { status: QualityStatus | null; findings: QualityFinding[]; timeZone: string; onRefresh: () => void }) {
+function QualityPanel({
+  status,
+  findings,
+  jobs,
+  executions,
+  timeZone,
+  onRefresh,
+  onConfigure,
+  onRun,
+  onBackfill,
+  onSetEnabled
+}: {
+  status: QualityStatus | null;
+  findings: QualityFinding[];
+  jobs: QualityValidationJob[];
+  executions: QualityExecution[];
+  timeZone: string;
+  onRefresh: () => void;
+  onConfigure: () => void;
+  onRun: (job: QualityValidationJob) => void;
+  onBackfill: (job: QualityValidationJob, range: { start: string; end: string }) => void;
+  onSetEnabled: (job: QualityValidationJob, enabled: boolean) => void;
+}) {
   const summary = qualitySummary(findings);
+  const [backfillJob, setBackfillJob] = useState<QualityValidationJob | null>(null);
   return (
     <section className="quality-panel">
       <header className="section-heading">
-        <div><h2>Data quality</h2><p>{status?.asOf ? `Last validation ${formatDate(status.asOf, timeZone)}` : 'No validation history yet'}</p></div>
+        <div><h2>Data quality</h2><p>{status?.latestExecutionId ? `Last validation ${formatDate(status.asOf, timeZone)}` : jobs.length ? 'Validation configured. No execution has completed yet.' : 'No validation has been configured for this market-data series.'}</p></div>
         <div className="section-actions">
-          <StatusBadge status={status?.overallStatus ?? (findings.length ? 'degraded' : 'unknown')} />
+          <StatusBadge status={status?.overallStatus ?? 'unknown'} />
+          {!jobs.length && <button type="button" onClick={onConfigure}>Configure validation</button>}
           <button type="button" onClick={onRefresh}>Refresh results</button>
         </div>
       </header>
       <div className="quality-summary-grid">
-        <MetricTile label="Freshness" value={summary.freshness ? summary.freshness : 'Healthy'} />
+        <MetricTile label="Freshness" value={summary.freshness || (status?.latestExecutionId ? 'Healthy' : 'Unknown')} />
         <MetricTile label="Gaps" value={summary.gaps.toLocaleString()} />
         <MetricTile label="Duplicates" value={summary.duplicates.toLocaleString()} />
         <MetricTile label="Warnings" value={summary.warnings.toLocaleString()} />
       </div>
+      {!!jobs.length && (
+        <div className="table-scroll compact">
+          <table>
+            <thead><tr><th>Configuration</th><th>Schedule</th><th>Validators</th><th>Last run</th><th></th></tr></thead>
+            <tbody>{jobs.map(job => {
+              const latest = executions.find(execution => execution.jobId === job.id);
+              return (
+                <tr key={job.id}>
+                  <td><strong>{job.name}</strong><small>{job.enabled ? 'Enabled' : 'Disabled'}</small></td>
+                  <td><code>{job.cronExpression}</code><small>{job.windowStartExpression} to {job.windowEndExpression}</small></td>
+                  <td>{job.checks.filter(check => check.enabled).length}</td>
+                  <td>{latest ? <><StatusBadge status={latest.status} /><small>{formatDate(latest.queuedAt, timeZone)}</small></> : 'No executions yet'}</td>
+                  <td className="button-row">
+                    <button className="table-action" onClick={() => onSetEnabled(job, !job.enabled)}>{job.enabled ? 'Disable' : 'Enable'}</button>
+                    <button className="table-action" onClick={() => onRun(job)}>Run now</button>
+                    <button className="table-action" onClick={() => setBackfillJob(job)}>Backfill</button>
+                  </td>
+                </tr>
+              );
+            })}</tbody>
+          </table>
+        </div>
+      )}
       <div className="table-scroll compact">
         <table>
           <thead><tr><th>Status</th><th>Finding</th><th>Affected range</th><th>Count</th></tr></thead>
@@ -499,9 +670,42 @@ function QualityPanel({ status, findings, timeZone, onRefresh }: { status: Quali
             </tr>
           ))}</tbody>
         </table>
-        {!findings.length && <p className="empty-state">No active validation findings.</p>}
+        {!findings.length && <p className="empty-state">{status?.latestExecutionId ? 'No active validation findings.' : jobs.length ? 'Validation configured. No execution has completed yet.' : 'No validation has been configured for this market-data series.'}</p>}
       </div>
+      {!!executions.length && (
+        <div className="table-scroll compact">
+          <table>
+            <thead><tr><th>Execution</th><th>Window</th><th>Warnings</th><th>Critical</th></tr></thead>
+            <tbody>{executions.slice(0, 8).map(execution => (
+              <tr key={execution.id}>
+                <td><StatusBadge status={execution.status} /><small>{execution.triggerType} - {formatDate(execution.queuedAt, timeZone)}</small></td>
+                <td>{formatRange(execution.evaluatedStart, execution.evaluatedEnd, timeZone)}</td>
+                <td>{execution.warningCount}</td>
+                <td>{execution.criticalCount}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
+      )}
+      {backfillJob && <BackfillModal job={backfillJob} onClose={() => setBackfillJob(null)} onRun={range => { onBackfill(backfillJob, range); setBackfillJob(null); }} />}
     </section>
+  );
+}
+
+function BackfillModal({ job, onClose, onRun }: { job: QualityValidationJob; onClose: () => void; onRun: (range: { start: string; end: string }) => void }) {
+  const [start, setStart] = useState('now-7d');
+  const [end, setEnd] = useState('now');
+  return (
+    <div className="modal-backdrop" role="presentation" onClick={onClose}>
+      <div className="modal-panel form-modal" role="dialog" aria-modal="true" onClick={event => event.stopPropagation()}>
+        <header className="modal-header"><div><h3>Backfill validation</h3><p>{job.name}</p></div><button className="icon-button" onClick={onClose} aria-label="Close validation backfill">x</button></header>
+        <div className="form-grid">
+          <DateExpressionInput label="Start" value={start} onChange={setStart} />
+          <DateExpressionInput label="End" value={end} onChange={setEnd} />
+        </div>
+        <footer className="modal-actions"><button className="secondary" onClick={onClose}>Cancel</button><button onClick={() => onRun({ start, end })}>Run backfill</button></footer>
+      </div>
+    </div>
   );
 }
 
