@@ -14,19 +14,19 @@ public class IngestionControlController(
 {
     [HttpGet("schedules")]
     [ProducesResponseType(typeof(List<IngestionSchedule>), StatusCodes.Status200OK)]
-    public async Task<IActionResult> Schedules([FromQuery] string? curveId, CancellationToken cancellationToken)
+    public async Task<IActionResult> Schedules([FromQuery] string? seriesId, CancellationToken cancellationToken)
     {
-        return Ok(await repository.GetSchedulesAsync(curveId, cancellationToken));
+        return Ok(await repository.GetSchedulesAsync(seriesId, cancellationToken));
     }
 
     [HttpGet("jobs")]
     [ProducesResponseType(typeof(List<IngestionJob>), StatusCodes.Status200OK)]
     public async Task<IActionResult> Jobs(
         [FromQuery] string? scheduleId,
-        [FromQuery] string? curveId,
+        [FromQuery] string? seriesId,
         CancellationToken cancellationToken)
     {
-        return Ok(await repository.GetJobsAsync(scheduleId, curveId, cancellationToken));
+        return Ok(await repository.GetJobsAsync(scheduleId, seriesId, cancellationToken));
     }
 
     [HttpGet("executions")]
@@ -34,31 +34,31 @@ public class IngestionControlController(
     public async Task<IActionResult> Executions(
         [FromQuery] string? jobId,
         [FromQuery] string? scheduleId,
-        [FromQuery] string? curveId,
+        [FromQuery] string? seriesId,
         CancellationToken cancellationToken)
     {
-        return Ok(await repository.GetExecutionsAsync(jobId, scheduleId, curveId, cancellationToken));
+        return Ok(await repository.GetExecutionsAsync(jobId, scheduleId, seriesId, cancellationToken));
     }
 
-    [HttpGet("curves/{curveId}/schedules")]
+    [HttpGet("series/{seriesId}/schedules")]
     [ProducesResponseType(typeof(List<IngestionSchedule>), StatusCodes.Status200OK)]
-    public async Task<IActionResult> CurveSchedules([FromRoute] string curveId, CancellationToken cancellationToken)
+    public async Task<IActionResult> SeriesSchedules([FromRoute] string seriesId, CancellationToken cancellationToken)
     {
-        return Ok(await repository.GetSchedulesAsync(curveId, cancellationToken));
+        return Ok(await repository.GetSchedulesAsync(seriesId, cancellationToken));
     }
 
-    [HttpGet("curves/{curveId}/jobs")]
+    [HttpGet("series/{seriesId}/jobs")]
     [ProducesResponseType(typeof(List<IngestionJob>), StatusCodes.Status200OK)]
-    public async Task<IActionResult> CurveJobs([FromRoute] string curveId, CancellationToken cancellationToken)
+    public async Task<IActionResult> SeriesJobs([FromRoute] string seriesId, CancellationToken cancellationToken)
     {
-        return Ok(await repository.GetJobsAsync(null, curveId, cancellationToken));
+        return Ok(await repository.GetJobsAsync(null, seriesId, cancellationToken));
     }
 
-    [HttpGet("curves/{curveId}/executions")]
+    [HttpGet("series/{seriesId}/executions")]
     [ProducesResponseType(typeof(List<IngestionExecution>), StatusCodes.Status200OK)]
-    public async Task<IActionResult> CurveExecutions([FromRoute] string curveId, CancellationToken cancellationToken)
+    public async Task<IActionResult> SeriesExecutions([FromRoute] string seriesId, CancellationToken cancellationToken)
     {
-        return Ok(await repository.GetExecutionsAsync(null, null, curveId, cancellationToken));
+        return Ok(await repository.GetExecutionsAsync(null, null, seriesId, cancellationToken));
     }
 
     [HttpPost("schedules")]
@@ -77,15 +77,15 @@ public class IngestionControlController(
             return BadRequest(validation);
         }
 
-        if (string.IsNullOrWhiteSpace(request.CurveId) || string.IsNullOrWhiteSpace(request.Source) || string.IsNullOrWhiteSpace(request.Endpoint))
+        if (string.IsNullOrWhiteSpace(request.SeriesId) || string.IsNullOrWhiteSpace(request.Source) || string.IsNullOrWhiteSpace(request.Endpoint))
         {
-            return BadRequest("Curve, source, and provider route are required.");
+            return BadRequest("Series, source, and provider route are required.");
         }
 
         var schedule = await repository.CreateScheduleAsync(new IngestionSchedule
         {
-            Name = string.IsNullOrWhiteSpace(request.Name) ? request.CurveId.Trim() : request.Name.Trim(),
-            CurveId = request.CurveId.Trim(),
+            Name = string.IsNullOrWhiteSpace(request.Name) ? request.SeriesId.Trim() : request.Name.Trim(),
+            SeriesId = request.SeriesId.Trim(),
             CronExpression = request.CronExpression.Trim(),
             DefaultCronExpression = request.CronExpression.Trim(),
             Enabled = request.Enabled,
@@ -100,7 +100,7 @@ public class IngestionControlController(
             BatchSize = request.BatchSize
         }, cancellationToken);
 
-        return CreatedAtAction(nameof(Schedules), new { curveId = schedule.CurveId }, schedule);
+        return CreatedAtAction(nameof(Schedules), new { seriesId = schedule.SeriesId }, schedule);
     }
 
     [HttpPut("schedules/{id}")]
@@ -172,15 +172,15 @@ public class IngestionControlController(
         }
 
         var metadata = await datasets.GetAsync(request.DatasetId, cancellationToken);
-        if (metadata is null || metadata.CurveId != schedule.CurveId)
+        if (metadata is null || metadata.SeriesId != schedule.SeriesId)
         {
-            return BadRequest("Dataset does not belong to this schedule curve.");
+            return BadRequest("Dataset does not belong to this schedule series.");
         }
 
         var message = await repository.CreateBackloadJobAsync(
             schedule,
             metadata.Endpoint,
-            metadata.Source,
+            metadata.Provider,
             WithoutDateRange(metadata.RequestParameters),
             request.WindowStartExpression.Trim(),
             request.WindowEndExpression.Trim(),
@@ -240,7 +240,7 @@ public record UpdateIngestionScheduleRequest(
 
 public record CreateIngestionScheduleRequest(
     string Name,
-    string CurveId,
+    string SeriesId,
     string Source,
     string Endpoint,
     Dictionary<string, string> Parameters,

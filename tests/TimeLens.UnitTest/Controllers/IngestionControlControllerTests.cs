@@ -11,28 +11,28 @@ namespace TimeLens.UnitTest.Controllers;
 public class IngestionControlControllerTests
 {
     [Fact]
-    public async Task CurveEndpoints_FilterByCurveId()
+    public async Task SeriesEndpoints_FilterBySeriesId()
     {
         var repository = new Mock<IIngestionControlRepository>();
         var cancellationToken = CancellationToken.None;
-        var curveId = "dk.public_power";
+        var seriesId = "coinbase:btc-usd:1m";
 
-        repository.Setup(x => x.GetSchedulesAsync(curveId, cancellationToken))
-            .ReturnsAsync([new IngestionSchedule { CurveId = curveId }]);
-        repository.Setup(x => x.GetJobsAsync(null, curveId, cancellationToken))
-            .ReturnsAsync([new IngestionJob { CurveId = curveId }]);
-        repository.Setup(x => x.GetExecutionsAsync(null, null, curveId, cancellationToken))
-            .ReturnsAsync([new IngestionExecution { CurveId = curveId }]);
+        repository.Setup(x => x.GetSchedulesAsync(seriesId, cancellationToken))
+            .ReturnsAsync([new IngestionSchedule { SeriesId = seriesId }]);
+        repository.Setup(x => x.GetJobsAsync(null, seriesId, cancellationToken))
+            .ReturnsAsync([new IngestionJob { SeriesId = seriesId }]);
+        repository.Setup(x => x.GetExecutionsAsync(null, null, seriesId, cancellationToken))
+            .ReturnsAsync([new IngestionExecution { SeriesId = seriesId }]);
 
         var controller = CreateController(repository);
 
-        Assert.Single(Assert.IsType<OkObjectResult>(await controller.CurveSchedules(curveId, cancellationToken)).Value as List<IngestionSchedule> ?? []);
-        Assert.Single(Assert.IsType<OkObjectResult>(await controller.CurveJobs(curveId, cancellationToken)).Value as List<IngestionJob> ?? []);
-        Assert.Single(Assert.IsType<OkObjectResult>(await controller.CurveExecutions(curveId, cancellationToken)).Value as List<IngestionExecution> ?? []);
+        Assert.Single(Assert.IsType<OkObjectResult>(await controller.SeriesSchedules(seriesId, cancellationToken)).Value as List<IngestionSchedule> ?? []);
+        Assert.Single(Assert.IsType<OkObjectResult>(await controller.SeriesJobs(seriesId, cancellationToken)).Value as List<IngestionJob> ?? []);
+        Assert.Single(Assert.IsType<OkObjectResult>(await controller.SeriesExecutions(seriesId, cancellationToken)).Value as List<IngestionExecution> ?? []);
 
-        repository.Verify(x => x.GetSchedulesAsync(curveId, cancellationToken), Times.Once);
-        repository.Verify(x => x.GetJobsAsync(null, curveId, cancellationToken), Times.Once);
-        repository.Verify(x => x.GetExecutionsAsync(null, null, curveId, cancellationToken), Times.Once);
+        repository.Verify(x => x.GetSchedulesAsync(seriesId, cancellationToken), Times.Once);
+        repository.Verify(x => x.GetJobsAsync(null, seriesId, cancellationToken), Times.Once);
+        repository.Verify(x => x.GetExecutionsAsync(null, null, seriesId, cancellationToken), Times.Once);
     }
 
     [Fact]
@@ -87,11 +87,11 @@ public class IngestionControlControllerTests
 
         var result = await CreateController(repository).CreateSchedule(
             new CreateIngestionScheduleRequest(
-                "Manual forecast",
-                "dk.forecast.solar",
-                "energy-charts",
-                "public_power_forecast",
-                new Dictionary<string, string> { ["country"] = "dk" },
+                "BTC-USD 1m",
+                "coinbase:btc-usd:1m",
+                "coinbase-exchange",
+                "products/candles",
+                new Dictionary<string, string> { ["product_id"] = "BTC-USD", ["timeframe"] = "1m" },
                 "*/30 * * * *",
                 true,
                 48,
@@ -103,9 +103,9 @@ public class IngestionControlControllerTests
         Assert.IsType<CreatedAtActionResult>(result);
         repository.Verify(x => x.CreateScheduleAsync(
             It.Is<IngestionSchedule>(schedule =>
-                schedule.CurveId == "dk.forecast.solar"
-                && schedule.Source == "energy-charts"
-                && schedule.Endpoint == "public_power_forecast"
+                schedule.SeriesId == "coinbase:btc-usd:1m"
+                && schedule.Source == "coinbase-exchange"
+                && schedule.Endpoint == "products/candles"
                 && schedule.Enabled),
             cancellationToken), Times.Once);
     }

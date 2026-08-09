@@ -5,9 +5,14 @@ namespace TimeLens.Domain.Models;
 public static class QualityStatuses
 {
     public const string Healthy = "healthy";
+    public const string Warning = "warning";
     public const string Degraded = "degraded";
     public const string Critical = "critical";
     public const string Unknown = "unknown";
+    public const string Skipped = "skipped";
+    public const string ExecutionError = "execution_error";
+    public const string InsufficientData = "insufficient_data";
+    public const string MarketClosed = "market_closed";
 }
 
 public static class QualityExecutionStatuses
@@ -54,7 +59,7 @@ public record RegisteredValidationPluginDto(
     DateTimeOffset RegisteredAt,
     DateTimeOffset UpdatedAt);
 
-public record QualityCurveGroupDto(
+public record QualitySeriesGroupDto(
     string Id,
     string Name,
     string Description,
@@ -65,17 +70,17 @@ public record QualityCurveGroupDto(
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt);
 
-public record QualityCurveGroupMemberDto(
+public record QualitySeriesGroupMemberDto(
     string GroupId,
     string DatasetId,
-    string CurveId,
+    string SeriesId,
     DateTimeOffset CreatedAt);
 
-public record ReplaceQualityCurveGroupMembersRequest(List<QualityCurveGroupMemberRequest> Members);
+public record ReplaceQualitySeriesGroupMembersRequest(List<QualitySeriesGroupMemberRequest> Members);
 
-public record QualityCurveGroupMemberRequest(string DatasetId, string CurveId);
+public record QualitySeriesGroupMemberRequest(string DatasetId, string SeriesId);
 
-public record UpsertQualityCurveGroupRequest(
+public record UpsertQualitySeriesGroupRequest(
     string? Id,
     string Name,
     string? Description,
@@ -151,7 +156,7 @@ public record QualityFindingDto(
     string? TargetExecutionId,
     string? ValidatorExecutionId,
     string DatasetId,
-    string CurveId,
+    string SeriesId,
     string ValidatorId,
     string Category,
     string Severity,
@@ -173,7 +178,7 @@ public record QualityFindingDto(
 
 public record QualityStatusDto(
     string DatasetId,
-    string CurveId,
+    string SeriesId,
     string OverallStatus,
     JsonElement CategoryStatuses,
     string LatestExecutionId,
@@ -214,7 +219,8 @@ public record QualityFindingDraftDto(
     int? ExpectedCount,
     int? ActualCount,
     int? AffectedCount,
-    List<DateTimeOffset> SampleTimestamps);
+    List<DateTimeOffset> SampleTimestamps,
+    JsonElement? Details = null);
 
 public record ManualQualityEvaluationRequest(
     string DatasetId,

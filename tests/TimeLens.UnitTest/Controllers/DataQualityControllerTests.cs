@@ -73,6 +73,20 @@ public class DataQualityControllerTests
     }
 
     [Fact]
+    public async Task Status_ReturnsUnknownWhenNoSnapshotExists()
+    {
+        var qualityRepository = new Mock<IQualityRepository>();
+        qualityRepository.Setup(x => x.GetStatusAsync(null, "coinbase:btc-usd:1m", CancellationToken.None))
+            .ReturnsAsync((QualityStatusDto?)null);
+
+        var result = await Controller(qualityRepository.Object).Status(null, "coinbase:btc-usd:1m", CancellationToken.None);
+
+        var status = Assert.IsType<QualityStatusDto>(Assert.IsType<OkObjectResult>(result).Value);
+        Assert.Equal(QualityStatuses.Unknown, status.OverallStatus);
+        Assert.Equal("coinbase:btc-usd:1m", status.SeriesId);
+    }
+
+    [Fact]
     public async Task RunJob_PublishesValidationMessage()
     {
         var qualityRepository = new Mock<IQualityRepository>();
@@ -115,7 +129,7 @@ public class DataQualityControllerTests
 
     private static List<QualityValidatorTypeDto> Validators() =>
     [
-        new("completeness.missing-timestamps", "completeness", "Missing timestamps", "", "curve", 1, "warning", JsonSerializer.SerializeToElement(new { })),
-        new("freshness.latest-point", "freshness", "Latest point freshness", "", "curve", 1, "critical", JsonSerializer.SerializeToElement(new { }))
+        new("completeness.missing-timestamps", "completeness", "Missing timestamps", "", "series", 1, "warning", JsonSerializer.SerializeToElement(new { })),
+        new("freshness.latest-point", "freshness", "Latest point freshness", "", "series", 1, "critical", JsonSerializer.SerializeToElement(new { }))
     ];
 }

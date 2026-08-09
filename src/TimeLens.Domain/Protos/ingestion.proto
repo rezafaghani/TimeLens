@@ -16,8 +16,11 @@ message TimeSeriesBatchMessage {
 
 message TimeSeriesWritePointMessage {
   int64 unix_seconds = 1;
-  double value = 2;
-  bool has_value = 3;
+  double open = 2;
+  double high = 3;
+  double low = 4;
+  double close = 5;
+  double volume = 6;
 }
 
 message TimeSeriesInsertResultMessage {

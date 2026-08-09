@@ -34,6 +34,11 @@ public static class QualityValidationEngine
 
     public static List<DateTimeOffset> ExpectedTimestamps(DateTimeOffset start, DateTimeOffset end, TimeSpan granularity)
     {
+        return ExpectedTimestamps(start, end, granularity, Crypto24x7MarketCalendar.Instance);
+    }
+
+    public static List<DateTimeOffset> ExpectedTimestamps(DateTimeOffset start, DateTimeOffset end, TimeSpan granularity, IMarketCalendar calendar)
+    {
         if (start >= end || granularity <= TimeSpan.Zero)
         {
             return [];
@@ -42,7 +47,10 @@ public static class QualityValidationEngine
         var result = new List<DateTimeOffset>();
         for (var timestamp = start; timestamp < end; timestamp = timestamp.Add(granularity))
         {
-            result.Add(timestamp);
+            if (calendar.IsExpected(timestamp, timestamp.Add(granularity)))
+            {
+                result.Add(timestamp);
+            }
         }
 
         return result;
@@ -75,8 +83,57 @@ public static class QualityValidationEngine
         int? expectedCount = null,
         int? actualCount = null,
         int? affectedCount = null,
-        IEnumerable<DateTimeOffset>? samples = null) =>
-        new(validatorId, category, severity, status, title, message, affectedStart, affectedEnd, expectedCount, actualCount, affectedCount, samples?.ToList() ?? []);
+        IEnumerable<DateTimeOffset>? samples = null,
+        JsonElement? details = null) =>
+        new(validatorId, category, severity, status, title, message, affectedStart, affectedEnd, expectedCount, actualCount, affectedCount, samples?.ToList() ?? [], details);
+
+    internal static QualityFindingDraftDto InsufficientData(string validatorId, string title, string message, QualityEvaluationRequest request, int actualCount) =>
+        Finding(validatorId, "anomaly", "informational", QualityStatuses.InsufficientData,
+            title, message, request.Start, request.End, actualCount: actualCount);
+
+    internal static string ToIsoDuration(string timeframe) => timeframe switch
+    {
+        "1m" => "PT1M",
+        "5m" => "PT5M",
+        "15m" => "PT15M",
+        "1h" => "PT1H",
+        "1d" => "P1D",
+        _ => timeframe
+    };
+}
+
+public interface IMarketCalendar
+{
+    string Id { get; }
+    bool IsExpected(DateTimeOffset start, DateTimeOffset end);
+}
+
+public sealed class Crypto24x7MarketCalendar : IMarketCalendar
+{
+    public static readonly Crypto24x7MarketCalendar Instance = new();
+    public string Id => "crypto-24x7";
+    public bool IsExpected(DateTimeOffset start, DateTimeOffset end) => start < end;
+}
+
+internal static class MarketCalendars
+{
+    public static IMarketCalendar Resolve(string? id) => id?.Trim().ToLowerInvariant() switch
+    {
+        "" or null or "crypto" or "crypto-24x7" or "24x7" => Crypto24x7MarketCalendar.Instance,
+        _ => Crypto24x7MarketCalendar.Instance
+    };
+}
+
+internal static class ValidationConfig
+{
+    public static bool? GetOptionalBool(JsonElement configuration, string name)
+    {
+        return configuration.ValueKind == JsonValueKind.Object
+            && configuration.TryGetProperty(name, out var value)
+            && (value.ValueKind == JsonValueKind.True || value.ValueKind == JsonValueKind.False)
+            ? value.GetBoolean()
+            : null;
+    }
 }
 
 public abstract class QualityValidationPlugin(
@@ -113,7 +170,7 @@ public abstract class QualityValidationPlugin(
         }
 
         if (!ExecutionPluginConfiguration.TryGetDuration(context.Configuration, "granularity", out var granularity)
-            && !ExecutionPluginConfiguration.TryParseDuration(context.Dataset.Granularity, out granularity))
+            && !ExecutionPluginConfiguration.TryParseDuration(QualityValidationEngine.ToIsoDuration(context.Dataset.Timeframe), out granularity))
         {
             throw new ArgumentException($"Dataset '{context.TargetId}' has invalid granularity.");
         }
@@ -162,17 +219,17 @@ public sealed class RequiredMetadataValidationPlugin() : QualityValidationPlugin
     "metadata.required",
     "metadata",
     "Required metadata",
-    "Checks required curve metadata such as provider, type, granularity, unit, and time zone.",
+    "Checks required market-data metadata such as provider, symbol, data type, timeframe, unit, and time zone.",
     "warning",
-    new { requiredFields = new[] { "source", "dataKind", "category", "granularity", "unit" } })
+    new { requiredFields = new[] { "provider", "symbol", "marketDataType", "timeframe", "unit" } })
 {
     internal override List<QualityFindingDraftDto> Evaluate(ExecutionPluginContext context, QualityEvaluationRequest request)
     {
         var missing = new List<string>();
-        if (string.IsNullOrWhiteSpace(request.Metadata.Source)) missing.Add("source");
-        if (string.IsNullOrWhiteSpace(request.Metadata.DataKind)) missing.Add("dataKind");
-        if (string.IsNullOrWhiteSpace(request.Metadata.Category)) missing.Add("category");
-        if (string.IsNullOrWhiteSpace(request.Metadata.Granularity)) missing.Add("granularity");
+        if (string.IsNullOrWhiteSpace(request.Metadata.Provider)) missing.Add("provider");
+        if (string.IsNullOrWhiteSpace(request.Metadata.Symbol)) missing.Add("symbol");
+        if (string.IsNullOrWhiteSpace(request.Metadata.MarketDataType)) missing.Add("marketDataType");
+        if (string.IsNullOrWhiteSpace(request.Metadata.Timeframe)) missing.Add("timeframe");
         if (string.IsNullOrWhiteSpace(request.Metadata.Unit)) missing.Add("unit");
 
         return missing.Count == 0 ? [] :
@@ -196,12 +253,24 @@ public sealed class EmptyDataValidationPlugin() : QualityValidationPlugin(
     internal override List<QualityFindingDraftDto> Evaluate(ExecutionPluginContext context, QualityEvaluationRequest request)
     {
         var points = Points(request);
+        var expected = QualityValidationEngine.ExpectedTimestamps(request.Start, request.End, request.Granularity, MarketCalendars.Resolve(request.Metadata.Calendar));
+        if (expected.Count == 0)
+        {
+            return
+            [
+                QualityValidationEngine.Finding("availability.empty-data", "availability", "informational", QualityStatuses.MarketClosed,
+                    "Market closed",
+                    "No observations were expected in this evaluation range for the configured market calendar.",
+                    request.Start, request.End, expectedCount: 0, actualCount: points.Count)
+            ];
+        }
+
         return points.Count != 0 ? [] :
         [
             QualityValidationEngine.Finding("availability.empty-data", "availability", "critical", QualityStatuses.Critical,
                 "No data returned",
                 "The evaluation range returned no time-series points.",
-                request.Start, request.End, expectedCount: QualityValidationEngine.ExpectedTimestamps(request.Start, request.End, request.Granularity).Count, actualCount: 0)
+                request.Start, request.End, expectedCount: expected.Count, actualCount: 0)
         ];
     }
 }
@@ -216,7 +285,12 @@ public sealed class MissingTimestampsValidationPlugin() : QualityValidationPlugi
 {
     internal override List<QualityFindingDraftDto> Evaluate(ExecutionPluginContext context, QualityEvaluationRequest request)
     {
-        var expected = QualityValidationEngine.ExpectedTimestamps(request.Start, request.End, request.Granularity);
+        var expected = QualityValidationEngine.ExpectedTimestamps(request.Start, request.End, request.Granularity, MarketCalendars.Resolve(request.Metadata.Calendar));
+        if (expected.Count == 0)
+        {
+            return [];
+        }
+
         var actual = Points(request)
             .Where(x => x.Timestamp >= request.Start && x.Timestamp < request.End)
             .Select(x => x.Timestamp)
@@ -237,7 +311,7 @@ public sealed class TimestampAlignmentValidationPlugin() : QualityValidationPlug
     "timestamps.alignment",
     "timestamp_alignment",
     "Timestamp alignment",
-    "Checks that timestamps align to the configured curve granularity.",
+    "Checks that timestamps align to the configured series timeframe.",
     "warning",
     new { granularity = "PT15M" })
 {
@@ -270,19 +344,22 @@ public sealed class FreshnessValidationPlugin() : QualityValidationPlugin(
     internal override List<QualityFindingDraftDto> Evaluate(ExecutionPluginContext context, QualityEvaluationRequest request)
     {
         var points = Points(request);
-        if (request.AllowedDelay is null || points.Count == 0)
+        if (points.Count == 0)
         {
             return [];
         }
 
         var latest = points.Max(x => x.Timestamp);
+        var gracePeriod = ExecutionPluginConfiguration.GetOptionalDuration(context.Configuration, "gracePeriod") ?? TimeSpan.Zero;
+        var allowedDelay = request.AllowedDelay ?? request.Granularity.Add(gracePeriod);
         var delay = request.Now - latest;
-        return delay <= request.AllowedDelay.Value ? [] :
+        return delay <= allowedDelay ? [] :
         [
             QualityValidationEngine.Finding("freshness.latest-point", "freshness", "critical", QualityStatuses.Critical,
                 "Latest point is stale",
-                $"Latest point is {delay} old; allowed delay is {request.AllowedDelay.Value}.",
-                latest, request.Now, affectedCount: 1, samples: [latest])
+                $"Latest point is {delay} old; allowed delay is {allowedDelay} for {request.Metadata.Symbol} {request.Metadata.Timeframe}.",
+                latest, request.Now, affectedCount: 1, samples: [latest],
+                details: JsonSerializer.SerializeToElement(new { request.Metadata.Provider, request.Metadata.Symbol, request.Metadata.Timeframe, AllowedDelay = allowedDelay.ToString(), Delay = delay.ToString() }, QualityValidationEngine.JsonOptions))
         ];
     }
 }
@@ -342,6 +419,84 @@ public sealed class ValueRangeValidationPlugin() : QualityValidationPlugin(
                     ? $"{invalid.Count} provider data points have null values."
                     : $"{invalid.Count} values are null, non-finite, or outside configured bounds.",
                 invalid.First(), invalid.Last(), affectedCount: invalid.Count, samples: invalid.Take(20))
+        ];
+    }
+}
+
+public sealed class OhlcConsistencyValidationPlugin() : QualityValidationPlugin(
+    "validity.ohlc-consistency",
+    "value_validity",
+    "OHLC consistency",
+    "Checks OHLC price positivity and candle ordering constraints.",
+    "warning",
+    new { requirePositivePrices = true, severity = "warning" })
+{
+    internal override List<QualityFindingDraftDto> Evaluate(ExecutionPluginContext context, QualityEvaluationRequest request)
+    {
+        if (!request.Metadata.MarketDataType.Equals("ohlcv", StringComparison.OrdinalIgnoreCase))
+        {
+            return [];
+        }
+
+        var requirePositive = ValidationConfig.GetOptionalBool(context.Configuration, "requirePositivePrices") ?? true;
+        var invalid = new List<(DateTimeOffset Timestamp, string Field, double Observed, string Expected)>();
+        foreach (var point in Points(request).Where(x => x.Timestamp >= request.Start && x.Timestamp < request.End))
+        {
+            if (requirePositive)
+            {
+                if (point.Open <= 0) invalid.Add((point.Timestamp, "open", point.Open, "> 0"));
+                if (point.High <= 0) invalid.Add((point.Timestamp, "high", point.High, "> 0"));
+                if (point.Low <= 0) invalid.Add((point.Timestamp, "low", point.Low, "> 0"));
+                if (point.Close <= 0) invalid.Add((point.Timestamp, "close", point.Close, "> 0"));
+            }
+
+            if (point.High < point.Low) invalid.Add((point.Timestamp, "high", point.High, $">= low ({point.Low})"));
+            if (point.High < point.Open) invalid.Add((point.Timestamp, "high", point.High, $">= open ({point.Open})"));
+            if (point.High < point.Close) invalid.Add((point.Timestamp, "high", point.High, $">= close ({point.Close})"));
+            if (point.Low > point.Open) invalid.Add((point.Timestamp, "low", point.Low, $"<= open ({point.Open})"));
+            if (point.Low > point.Close) invalid.Add((point.Timestamp, "low", point.Low, $"<= close ({point.Close})"));
+        }
+
+        return invalid.Count == 0 ? [] :
+        [
+            QualityValidationEngine.Finding("validity.ohlc-consistency", "value_validity", "warning", QualityStatuses.Degraded,
+                "OHLC bars are inconsistent",
+                $"{invalid.Count} OHLC constraints failed. Example: {invalid[0].Timestamp:O} {invalid[0].Field} observed {invalid[0].Observed}, expected {invalid[0].Expected}.",
+                invalid.Min(x => x.Timestamp), invalid.Max(x => x.Timestamp), affectedCount: invalid.Count, samples: invalid.Select(x => x.Timestamp).Distinct().Take(20),
+                details: JsonSerializer.SerializeToElement(invalid.Take(50).Select(x => new { x.Timestamp, x.Field, x.Observed, x.Expected }), QualityValidationEngine.JsonOptions))
+        ];
+    }
+}
+
+public sealed class VolumeValidationPlugin() : QualityValidationPlugin(
+    "validity.volume",
+    "value_validity",
+    "Volume validity",
+    "Checks volume constraints. Zero volume is allowed by default.",
+    "warning",
+    new { allowZeroVolume = true, severity = "warning" })
+{
+    internal override List<QualityFindingDraftDto> Evaluate(ExecutionPluginContext context, QualityEvaluationRequest request)
+    {
+        if (!request.Metadata.MarketDataType.Equals("ohlcv", StringComparison.OrdinalIgnoreCase))
+        {
+            return [];
+        }
+
+        var allowZero = ValidationConfig.GetOptionalBool(context.Configuration, "allowZeroVolume") ?? true;
+        var invalid = Points(request)
+            .Where(x => x.Timestamp >= request.Start && x.Timestamp < request.End)
+            .Where(x => x.Volume < 0 || !allowZero && x.Volume == 0)
+            .Select(x => new { x.Timestamp, Field = "volume", Observed = x.Volume, Expected = allowZero ? ">= 0" : "> 0" })
+            .ToList();
+
+        return invalid.Count == 0 ? [] :
+        [
+            QualityValidationEngine.Finding("validity.volume", "value_validity", "warning", QualityStatuses.Degraded,
+                "Volume is invalid",
+                $"{invalid.Count} volume values violate the configured constraint. Example: {invalid[0].Timestamp:O} volume observed {invalid[0].Observed}, expected {invalid[0].Expected}.",
+                invalid.First().Timestamp, invalid.Last().Timestamp, affectedCount: invalid.Count, samples: invalid.Select(x => x.Timestamp).Take(20),
+                details: JsonSerializer.SerializeToElement(invalid.Take(50), QualityValidationEngine.JsonOptions))
         ];
     }
 }
@@ -436,15 +591,204 @@ public sealed class FlatLineValidationPlugin() : QualityValidationPlugin(
     }
 }
 
-public sealed class RollingThresholdAnomalyValidationPlugin() : QualityValidationPlugin(
-    "anomaly.rolling-threshold",
+public sealed class PriceSpikeValidationPlugin() : QualityValidationPlugin(
+    "anomaly.price-spike",
     "anomaly",
-    "Rolling threshold anomaly",
-    "Checks basic deterministic spikes or drops against a rolling window.",
-    "informational",
-    new { lookback = "P7D", standardDeviationMultiplier = 3.0 })
+    "Price spike",
+    "Checks close-price spikes against rolling z-score and percentage-change thresholds.",
+    "warning",
+    new { rollingWindow = 20, minimumObservations = 10, zScoreThreshold = 4.0, percentageChangeThreshold = 15.0, severity = "warning" })
 {
-    internal override List<QualityFindingDraftDto> Evaluate(ExecutionPluginContext context, QualityEvaluationRequest request) => [];
+    internal override List<QualityFindingDraftDto> Evaluate(ExecutionPluginContext context, QualityEvaluationRequest request)
+    {
+        var window = ExecutionPluginConfiguration.GetOptionalInt(context.Configuration, "rollingWindow") ?? 20;
+        var minimum = ExecutionPluginConfiguration.GetOptionalInt(context.Configuration, "minimumObservations") ?? Math.Min(10, window);
+        var zThreshold = ExecutionPluginConfiguration.GetOptionalDouble(context.Configuration, "zScoreThreshold") ?? 4.0;
+        var pctThreshold = ExecutionPluginConfiguration.GetOptionalDouble(context.Configuration, "percentageChangeThreshold") ?? 15.0;
+        var points = Points(request).Where(x => x.Timestamp >= request.Start && x.Timestamp < request.End && MarketValidationStatistics.IsFinite(x.Close)).ToList();
+        if (points.Count < minimum + 1)
+        {
+            return [QualityValidationEngine.InsufficientData("anomaly.price-spike", "Price spike skipped", $"Price spike validation needs at least {minimum + 1} observations; found {points.Count}.", request, points.Count)];
+        }
+
+        var spikes = MarketValidationStatistics.RollingSpike(points.Select(x => (x.Timestamp, Value: x.Close)).ToList(), window, minimum, zThreshold, pctThreshold, request.NearZeroFloor);
+
+        return spikes.Count == 0 ? [] :
+        [
+            QualityValidationEngine.Finding("anomaly.price-spike", "anomaly", "warning", QualityStatuses.Warning,
+                "Price spike detected",
+                $"{spikes.Count} close-price observations exceeded rolling z-score or percentage-change thresholds.",
+                spikes.First().Timestamp, spikes.Last().Timestamp, affectedCount: spikes.Count, samples: spikes.Select(x => x.Timestamp).Take(20),
+                details: JsonSerializer.SerializeToElement(spikes.Take(50), QualityValidationEngine.JsonOptions))
+        ];
+    }
+}
+
+public sealed class VolumeSpikeValidationPlugin() : QualityValidationPlugin(
+    "anomaly.volume-spike",
+    "anomaly",
+    "Volume spike",
+    "Checks volume spikes against rolling z-score and percentage-change thresholds.",
+    "warning",
+    new { rollingWindow = 20, minimumObservations = 10, zScoreThreshold = 5.0, percentageChangeThreshold = 300.0, severity = "warning" })
+{
+    internal override List<QualityFindingDraftDto> Evaluate(ExecutionPluginContext context, QualityEvaluationRequest request)
+    {
+        var window = ExecutionPluginConfiguration.GetOptionalInt(context.Configuration, "rollingWindow") ?? 20;
+        var minimum = ExecutionPluginConfiguration.GetOptionalInt(context.Configuration, "minimumObservations") ?? Math.Min(10, window);
+        var zThreshold = ExecutionPluginConfiguration.GetOptionalDouble(context.Configuration, "zScoreThreshold") ?? 5.0;
+        var pctThreshold = ExecutionPluginConfiguration.GetOptionalDouble(context.Configuration, "percentageChangeThreshold") ?? 300.0;
+        var points = Points(request).Where(x => x.Timestamp >= request.Start && x.Timestamp < request.End && MarketValidationStatistics.IsFinite(x.Volume)).ToList();
+        if (points.Count < minimum + 1)
+        {
+            return [QualityValidationEngine.InsufficientData("anomaly.volume-spike", "Volume spike skipped", $"Volume spike validation needs at least {minimum + 1} observations; found {points.Count}.", request, points.Count)];
+        }
+
+        var spikes = MarketValidationStatistics.RollingSpike(points.Select(x => (x.Timestamp, Value: x.Volume)).ToList(), window, minimum, zThreshold, pctThreshold, request.NearZeroFloor);
+
+        return spikes.Count == 0 ? [] :
+        [
+            QualityValidationEngine.Finding("anomaly.volume-spike", "anomaly", "warning", QualityStatuses.Warning,
+                "Volume spike detected",
+                $"{spikes.Count} volume observations exceeded rolling z-score or percentage-change thresholds.",
+                spikes.First().Timestamp, spikes.Last().Timestamp, affectedCount: spikes.Count, samples: spikes.Select(x => x.Timestamp).Take(20),
+                details: JsonSerializer.SerializeToElement(spikes.Take(50), QualityValidationEngine.JsonOptions))
+        ];
+    }
+}
+
+public sealed class FlatPriceValidationPlugin() : QualityValidationPlugin(
+    "stale.flat-price",
+    "stale_values",
+    "Flat price",
+    "Checks repeated close prices over a configured observation count.",
+    "warning",
+    new { minimumConsecutiveBars = 5, tolerance = 0.0, severity = "warning" })
+{
+    internal override List<QualityFindingDraftDto> Evaluate(ExecutionPluginContext context, QualityEvaluationRequest request)
+    {
+        var minimum = ExecutionPluginConfiguration.GetOptionalInt(context.Configuration, "minimumConsecutiveBars") ?? 5;
+        var tolerance = ExecutionPluginConfiguration.GetOptionalDouble(context.Configuration, "tolerance") ?? 0.0;
+        if (minimum < 2)
+        {
+            return [];
+        }
+
+        var points = Points(request).Where(x => x.Timestamp >= request.Start && x.Timestamp < request.End && MarketValidationStatistics.IsFinite(x.Close)).ToList();
+        var run = MarketValidationStatistics.LongestFlatRun(points.Select(x => (x.Timestamp, Value: x.Close)).ToList(), tolerance);
+        return run.Count < minimum ? [] :
+        [
+            QualityValidationEngine.Finding("stale.flat-price", "stale_values", "warning", QualityStatuses.Warning,
+                "Close price is flat",
+                $"{run.Count} consecutive close prices changed by no more than {tolerance}.",
+                run.First(), run.Last(), affectedCount: run.Count, samples: run.Take(20))
+        ];
+    }
+}
+
+public sealed class AbnormalVolatilityValidationPlugin() : QualityValidationPlugin(
+    "anomaly.abnormal-volatility",
+    "anomaly",
+    "Abnormal volatility",
+    "Checks absolute returns against a rolling return-volatility z-score.",
+    "warning",
+    new { rollingWindow = 20, minimumObservations = 10, zScoreThreshold = 4.0, severity = "warning" })
+{
+    internal override List<QualityFindingDraftDto> Evaluate(ExecutionPluginContext context, QualityEvaluationRequest request)
+    {
+        var window = ExecutionPluginConfiguration.GetOptionalInt(context.Configuration, "rollingWindow") ?? 20;
+        var minimum = ExecutionPluginConfiguration.GetOptionalInt(context.Configuration, "minimumObservations") ?? Math.Min(10, window);
+        var zThreshold = ExecutionPluginConfiguration.GetOptionalDouble(context.Configuration, "zScoreThreshold") ?? 4.0;
+        var points = Points(request).Where(x => x.Timestamp >= request.Start && x.Timestamp < request.End && MarketValidationStatistics.IsFinite(x.Close) && x.Close > 0).ToList();
+        if (points.Count < minimum + 2)
+        {
+            return [QualityValidationEngine.InsufficientData("anomaly.abnormal-volatility", "Abnormal volatility skipped", $"Abnormal volatility validation needs at least {minimum + 2} observations; found {points.Count}.", request, points.Count)];
+        }
+
+        var returns = new List<(DateTimeOffset Timestamp, double Value)>();
+        for (var i = 1; i < points.Count; i++)
+        {
+            returns.Add((points[i].Timestamp, Math.Abs(points[i].Close / points[i - 1].Close - 1.0)));
+        }
+
+        var spikes = MarketValidationStatistics.RollingSpike(returns, window, minimum, zThreshold, null, request.NearZeroFloor);
+        return spikes.Count == 0 ? [] :
+        [
+            QualityValidationEngine.Finding("anomaly.abnormal-volatility", "anomaly", "warning", QualityStatuses.Warning,
+                "Abnormal volatility detected",
+                $"{spikes.Count} returns exceeded the rolling volatility z-score threshold.",
+                spikes.First().Timestamp, spikes.Last().Timestamp, affectedCount: spikes.Count, samples: spikes.Select(x => x.Timestamp).Take(20),
+                details: JsonSerializer.SerializeToElement(spikes.Take(50), QualityValidationEngine.JsonOptions))
+        ];
+    }
+}
+
+internal record RollingSpikeFinding(DateTimeOffset Timestamp, double Observed, double Mean, double StandardDeviation, double? ZScore, double? PercentageChange);
+
+internal static class MarketValidationStatistics
+{
+    public static bool IsFinite(double value) => !double.IsNaN(value) && !double.IsInfinity(value);
+
+    public static List<RollingSpikeFinding> RollingSpike(
+        List<(DateTimeOffset Timestamp, double Value)> points,
+        int window,
+        int minimumObservations,
+        double zScoreThreshold,
+        double? percentageChangeThreshold,
+        double nearZeroFloor)
+    {
+        var result = new List<RollingSpikeFinding>();
+        for (var i = 1; i < points.Count; i++)
+        {
+            var start = Math.Max(0, i - Math.Max(window, 1));
+            var history = points.Skip(start).Take(i - start).Select(x => x.Value).ToList();
+            if (history.Count < minimumObservations)
+            {
+                continue;
+            }
+
+            var mean = history.Average();
+            var variance = history.Sum(x => Math.Pow(x - mean, 2)) / history.Count;
+            var stdDev = Math.Sqrt(variance);
+            var current = points[i].Value;
+            var zScore = stdDev <= nearZeroFloor ? (double?)null : Math.Abs((current - mean) / stdDev);
+            var previous = points[i - 1].Value;
+            var percentage = Math.Abs(current - previous) / Math.Max(Math.Abs(previous), nearZeroFloor) * 100;
+            if (zScore >= zScoreThreshold || percentageChangeThreshold.HasValue && percentage >= percentageChangeThreshold.Value)
+            {
+                result.Add(new RollingSpikeFinding(points[i].Timestamp, current, mean, stdDev, zScore, percentage));
+            }
+        }
+
+        return result;
+    }
+
+    public static List<DateTimeOffset> LongestFlatRun(List<(DateTimeOffset Timestamp, double Value)> points, double tolerance)
+    {
+        var best = new List<DateTimeOffset>();
+        var current = new List<DateTimeOffset>();
+        for (var i = 1; i < points.Count; i++)
+        {
+            if (Math.Abs(points[i].Value - points[i - 1].Value) <= tolerance)
+            {
+                if (current.Count == 0)
+                {
+                    current.Add(points[i - 1].Timestamp);
+                }
+
+                current.Add(points[i].Timestamp);
+                if (current.Count > best.Count)
+                {
+                    best = [.. current];
+                }
+                continue;
+            }
+
+            current.Clear();
+        }
+
+        return best;
+    }
 }
 
 internal static class ValidationPlugins
@@ -458,8 +802,13 @@ internal static class ValidationPlugins
         new FreshnessValidationPlugin(),
         new DuplicateTimestampsValidationPlugin(),
         new ValueRangeValidationPlugin(),
+        new OhlcConsistencyValidationPlugin(),
+        new VolumeValidationPlugin(),
         new RateOfChangeValidationPlugin(),
         new FlatLineValidationPlugin(),
-        new RollingThresholdAnomalyValidationPlugin()
+        new PriceSpikeValidationPlugin(),
+        new VolumeSpikeValidationPlugin(),
+        new FlatPriceValidationPlugin(),
+        new AbnormalVolatilityValidationPlugin()
     ];
 }

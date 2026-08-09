@@ -1,3 +1,4 @@
+using System.Text.Json;
 using TimeLens.Domain.Models;
 using TimeLens.Domain.Services;
 using Microsoft.AspNetCore.Mvc;
@@ -16,46 +17,46 @@ public class DataQualityController(
         Ok(await qualityRepository.GetValidatorTypesAsync(ValidationPluginUsage.Api, cancellationToken));
 
     [HttpGet("groups")]
-    [ProducesResponseType(typeof(List<QualityCurveGroupDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(List<QualitySeriesGroupDto>), StatusCodes.Status200OK)]
     public async Task<IActionResult> Groups(CancellationToken cancellationToken)
     {
-        return Ok(await qualityRepository.GetCurveGroupsAsync(cancellationToken));
+        return Ok(await qualityRepository.GetSeriesGroupsAsync(cancellationToken));
     }
 
     [HttpPost("groups")]
-    [ProducesResponseType(typeof(QualityCurveGroupDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(QualitySeriesGroupDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
-    public async Task<IActionResult> UpsertGroup([FromBody] UpsertQualityCurveGroupRequest request, CancellationToken cancellationToken)
+    public async Task<IActionResult> UpsertGroup([FromBody] UpsertQualitySeriesGroupRequest request, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(request.Name))
         {
             return BadRequest("A group name is required.");
         }
 
-        return Ok(await qualityRepository.UpsertCurveGroupAsync(request, cancellationToken));
+        return Ok(await qualityRepository.UpsertSeriesGroupAsync(request, cancellationToken));
     }
 
     [HttpPatch("groups/{id}/enabled")]
-    [ProducesResponseType(typeof(QualityCurveGroupDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(QualitySeriesGroupDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> SetGroupEnabled([FromRoute] string id, [FromBody] SetEnabledRequest request, CancellationToken cancellationToken)
     {
-        var group = await qualityRepository.SetCurveGroupEnabledAsync(id, request.Enabled, cancellationToken);
+        var group = await qualityRepository.SetSeriesGroupEnabledAsync(id, request.Enabled, cancellationToken);
         return group is null ? NotFound() : Ok(group);
     }
 
     [HttpGet("groups/{id}/members")]
-    [ProducesResponseType(typeof(List<QualityCurveGroupMemberDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(List<QualitySeriesGroupMemberDto>), StatusCodes.Status200OK)]
     public async Task<IActionResult> GroupMembers([FromRoute] string id, CancellationToken cancellationToken)
     {
-        return Ok(await qualityRepository.GetCurveGroupMembersAsync(id, cancellationToken));
+        return Ok(await qualityRepository.GetSeriesGroupMembersAsync(id, cancellationToken));
     }
 
     [HttpPut("groups/{id}/members")]
-    [ProducesResponseType(typeof(List<QualityCurveGroupMemberDto>), StatusCodes.Status200OK)]
-    public async Task<IActionResult> ReplaceGroupMembers([FromRoute] string id, [FromBody] ReplaceQualityCurveGroupMembersRequest request, CancellationToken cancellationToken)
+    [ProducesResponseType(typeof(List<QualitySeriesGroupMemberDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> ReplaceGroupMembers([FromRoute] string id, [FromBody] ReplaceQualitySeriesGroupMembersRequest request, CancellationToken cancellationToken)
     {
-        return Ok(await qualityRepository.ReplaceCurveGroupMembersAsync(id, request, cancellationToken));
+        return Ok(await qualityRepository.ReplaceSeriesGroupMembersAsync(id, request, cancellationToken));
     }
 
     [HttpGet("jobs")]
@@ -150,11 +151,11 @@ public class DataQualityController(
     [ProducesResponseType(typeof(List<QualityFindingDto>), StatusCodes.Status200OK)]
     public async Task<IActionResult> Findings(
         [FromQuery] string? datasetId,
-        [FromQuery] string? curveId,
+        [FromQuery] string? seriesId,
         [FromQuery] bool activeOnly = true,
         CancellationToken cancellationToken = default)
     {
-        return Ok(await qualityRepository.GetFindingsAsync(datasetId, curveId, activeOnly, cancellationToken));
+        return Ok(await qualityRepository.GetFindingsAsync(datasetId, seriesId, activeOnly, cancellationToken));
     }
 
     [HttpGet("status")]
@@ -162,11 +163,13 @@ public class DataQualityController(
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Status(
         [FromQuery] string? datasetId,
-        [FromQuery] string? curveId,
+        [FromQuery] string? seriesId,
         CancellationToken cancellationToken)
     {
-        var status = await qualityRepository.GetStatusAsync(datasetId, curveId, cancellationToken);
-        return status is null ? NotFound() : Ok(status);
+        var status = await qualityRepository.GetStatusAsync(datasetId, seriesId, cancellationToken);
+        return status is null
+            ? Ok(new QualityStatusDto(datasetId ?? string.Empty, seriesId ?? string.Empty, QualityStatuses.Unknown, JsonSerializer.SerializeToElement(new { }), string.Empty, DateTimeOffset.UtcNow))
+            : Ok(status);
     }
 
     [HttpGet("summary")]

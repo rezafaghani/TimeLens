@@ -1,6 +1,6 @@
 namespace TimeLens.Ingestion.Grains;
 
-public interface IEnergyChartsDatasetGrain : IGrainWithStringKey
+public interface ICoinbaseCandleGrain : IGrainWithStringKey
 {
     Task IngestAsync(string messageJson, CancellationToken cancellationToken);
 }

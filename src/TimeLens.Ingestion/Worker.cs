@@ -71,12 +71,12 @@ public class Worker(
                     return;
                 }
 
-                if (message.Source != "energy-charts")
+                if (message.Source != "coinbase-exchange")
                 {
                     throw new InvalidOperationException($"Ingestion source '{message.Source}' is not supported.");
                 }
 
-                var grain = grainFactory.GetGrain<IEnergyChartsDatasetGrain>(message.CurveId);
+                var grain = grainFactory.GetGrain<ICoinbaseCandleGrain>(message.SeriesId);
                 await grain.IngestAsync(json, stoppingToken);
                 await channel.BasicAckAsync(eventArgs.DeliveryTag, multiple: false, cancellationToken: stoppingToken);
             }

@@ -2,7 +2,7 @@ using Microsoft.Extensions.Options;
 
 namespace TimeLens.Ingestion.Services;
 
-public class EnergyChartsRateLimiter(IOptions<IngestionOptions> options)
+public class ProviderRateLimiter(IOptions<IngestionOptions> options)
 {
     private readonly SemaphoreSlim _gate = new(1, 1);
     private DateTimeOffset _lastRequestAt = DateTimeOffset.MinValue;

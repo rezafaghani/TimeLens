@@ -1,7 +1,9 @@
 using TimeLens.Domain.Interfaces;
+using TimeLens.Domain.Models;
 using TimeLens.Insert.Services;
 using TimeLens.Infrastructure;
 using TimeLens.Infrastructure.Repositories;
+using TimeLens.Infrastructure.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Scalar.AspNetCore;
@@ -16,6 +18,7 @@ builder.WebHost.ConfigureKestrel(options =>
 builder.Services.AddControllers();
 builder.Services.AddGrpc();
 builder.Services.AddOpenApi();
+builder.Services.Configure<RabbitMqOptions>(builder.Configuration.GetSection("RabbitMq"));
 builder.Services.AddSingleton<TimeLensContext>(sp =>
 {
     var configuration = sp.GetRequiredService<IConfiguration>();
@@ -23,6 +26,7 @@ builder.Services.AddSingleton<TimeLensContext>(sp =>
     var clickHouse = configuration.GetConnectionString("ClickHouse") ?? throw new InvalidOperationException("ClickHouse connection string is not configured.");
     return new TimeLensContext(postgres, clickHouse);
 });
+builder.Services.AddSingleton<IMarketDataUpdatePublisher, RabbitMqMarketDataUpdatePublisher>();
 builder.Services.AddScoped<ITimeSeriesRepository, TimeSeriesRepository>();
 
 var authEnabled = builder.Configuration.GetValue("Auth:Enabled", false);

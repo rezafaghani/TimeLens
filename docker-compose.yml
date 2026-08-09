@@ -67,6 +67,7 @@ services:
       RabbitMq__ExchangeName: timelens.jobs
       RabbitMq__QueueName: timelens.ingestion.jobs
       RabbitMq__ValidationQueueName: timelens.validation.jobs
+      RabbitMq__MarketDataUpdatesQueueName: timelens.market-data.updates
     ports:
       - "5100:8080"
     restart: unless-stopped
@@ -85,6 +86,13 @@ services:
     environment:
       ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=${POSTGRES_DB:-timelens};Username=${POSTGRES_USER:-timelens};Password=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}"
       ConnectionStrings__ClickHouse: "Host=clickhouse;Port=8123;Protocol=http;Database=${CLICKHOUSE_DB:-timelens};Username=${CLICKHOUSE_USER:-default};Password=${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD is required}"
+      RabbitMq__HostName: rabbitmq
+      RabbitMq__Port: 5672
+      RabbitMq__VirtualHost: ${RABBITMQ_VHOST:-timelens}
+      RabbitMq__UserName: ${RABBITMQ_USER:-guest}
+      RabbitMq__Password: ${RABBITMQ_PASSWORD:?RABBITMQ_PASSWORD is required}
+      RabbitMq__ExchangeName: timelens.jobs
+      RabbitMq__MarketDataUpdatesQueueName: timelens.market-data.updates
     ports:
       - "5101:8080"
       - "5103:8081"
@@ -164,8 +172,9 @@ services:
       Ingestion__LookbackHours: 48
       Ingestion__BatchSize: 500
       Ingestion__MinRequestIntervalSeconds: 3
-      Ingestion__MaxEnergyChartsRetries: 3
+      Ingestion__MaxProviderRetries: 3
       Ingestion__RetryBaseDelaySeconds: 10
+      Coinbase__BaseUrl: ${COINBASE_BASE_URL:-https://api.exchange.coinbase.com/}
     restart: unless-stopped
     depends_on:
       insert:

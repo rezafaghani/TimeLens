@@ -21,7 +21,11 @@ public class IngestionWriteGrpcService(ITimeSeriesRepository timeSeriesRepositor
             Points = request.Points.Select(x => new TimeSeriesWritePoint
             {
                 Timestamp = DateTimeOffset.FromUnixTimeSeconds(x.UnixSeconds),
-                Value = x.HasValue ? x.Value : null
+                Open = x.Open,
+                High = x.High,
+                Low = x.Low,
+                Close = x.Close,
+                Volume = x.Volume
             }).ToList()
         }, context.CancellationToken);
 

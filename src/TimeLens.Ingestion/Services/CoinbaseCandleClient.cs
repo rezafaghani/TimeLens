@@ -1,19 +1,20 @@
+using System.Globalization;
+using System.Net;
 using System.Text.Json;
 using Microsoft.Extensions.Options;
-using System.Net;
 
 namespace TimeLens.Ingestion.Services;
 
-public class EnergyChartsClient(
+public class CoinbaseCandleClient(
     HttpClient httpClient,
-    EnergyChartsRateLimiter rateLimiter,
+    ProviderRateLimiter rateLimiter,
     IOptions<IngestionOptions> options,
-    ILogger<EnergyChartsClient> logger)
+    ILogger<CoinbaseCandleClient> logger)
 {
-    public async Task<JsonDocument> GetAsync(EnergyChartsDatasetDefinition definition, CancellationToken cancellationToken)
+    public async Task<JsonDocument> GetAsync(string productId, int granularitySeconds, DateTimeOffset start, DateTimeOffset end, CancellationToken cancellationToken)
     {
-        var uri = definition.Endpoint.TrimStart('/') + EnergyChartsDefaults.ToQueryString(definition.Parameters);
-        var maxRetries = Math.Max(options.Value.MaxEnergyChartsRetries, 0);
+        var uri = $"products/{Uri.EscapeDataString(productId)}/candles?granularity={granularitySeconds}&start={Iso(start)}&end={Iso(end)}";
+        var maxRetries = Math.Max(options.Value.MaxProviderRetries, 0);
 
         for (var attempt = 0; attempt <= maxRetries; attempt++)
         {
@@ -29,15 +30,16 @@ public class EnergyChartsClient(
 
             var delay = GetRetryDelay(response, attempt);
             logger.LogWarning(
-                "Energy Charts returned 429 for {Endpoint}. Retrying in {DelaySeconds:n0}s ({Attempt}/{MaxAttempts}).",
-                definition.Endpoint,
+                "Coinbase returned 429 for {ProductId} {Granularity}. Retrying in {DelaySeconds:n0}s ({Attempt}/{MaxAttempts}).",
+                productId,
+                granularitySeconds,
                 delay.TotalSeconds,
                 attempt + 1,
                 maxRetries);
             await Task.Delay(delay, cancellationToken);
         }
 
-        throw new InvalidOperationException("Energy Charts request retry loop exited unexpectedly.");
+        throw new InvalidOperationException("Coinbase request retry loop exited unexpectedly.");
     }
 
     private TimeSpan GetRetryDelay(HttpResponseMessage response, int attempt)
@@ -59,4 +61,6 @@ public class EnergyChartsClient(
         var baseDelaySeconds = Math.Max(options.Value.RetryBaseDelaySeconds, 1);
         return TimeSpan.FromSeconds(baseDelaySeconds * Math.Pow(2, attempt));
     }
+
+    private static string Iso(DateTimeOffset value) => value.UtcDateTime.ToString("O", CultureInfo.InvariantCulture);
 }

@@ -42,25 +42,14 @@ public sealed class TimeLensContext
     public async Task EnsurePostgresSchemaAsync(CancellationToken cancellationToken = default)
     {
         const string sql = """
-            CREATE TABLE IF NOT EXISTS renewable_assets (
-                id text PRIMARY KEY,
-                type integer NOT NULL,
-                name text NOT NULL,
-                capacity numeric NOT NULL,
-                meter_point_id bigint NOT NULL UNIQUE,
-                hub_height numeric NULL,
-                rotor_diameter numeric NULL,
-                compass_orientation text NULL
-            );
-
             CREATE TABLE IF NOT EXISTS ingestion_schedules (
                 id text PRIMARY KEY,
-                curve_id text NOT NULL,
+                series_id text NOT NULL,
                 name text NOT NULL,
                 cron_expression text NOT NULL,
                 default_cron_expression text NOT NULL DEFAULT '',
                 enabled boolean NOT NULL,
-                source text NOT NULL DEFAULT 'energy-charts',
+                source text NOT NULL DEFAULT 'coinbase-exchange',
                 endpoint text NOT NULL,
                 parameters jsonb NOT NULL,
                 lookback_hours integer NOT NULL,
@@ -74,13 +63,13 @@ public sealed class TimeLensContext
                 updated_at timestamptz NOT NULL
             );
 
-            CREATE INDEX IF NOT EXISTS ix_ingestion_schedules_enabled_curve
-                ON ingestion_schedules(enabled, curve_id);
+            CREATE INDEX IF NOT EXISTS ix_ingestion_schedules_enabled_series
+                ON ingestion_schedules(enabled, series_id);
 
             CREATE TABLE IF NOT EXISTS ingestion_jobs (
                 id text PRIMARY KEY,
                 schedule_id text NOT NULL,
-                curve_id text NOT NULL,
+                series_id text NOT NULL,
                 status text NOT NULL,
                 queued_at timestamptz NOT NULL,
                 started_at timestamptz NULL,
@@ -88,14 +77,14 @@ public sealed class TimeLensContext
                 error text NOT NULL
             );
 
-            CREATE INDEX IF NOT EXISTS ix_ingestion_jobs_schedule_curve_queued
-                ON ingestion_jobs(schedule_id, curve_id, queued_at DESC);
+            CREATE INDEX IF NOT EXISTS ix_ingestion_jobs_schedule_series_queued
+                ON ingestion_jobs(schedule_id, series_id, queued_at DESC);
 
             CREATE TABLE IF NOT EXISTS ingestion_executions (
                 id text PRIMARY KEY,
                 job_id text NOT NULL,
                 schedule_id text NOT NULL,
-                curve_id text NOT NULL,
+                series_id text NOT NULL,
                 status text NOT NULL,
                 created_at timestamptz NOT NULL,
                 started_at timestamptz NULL,
@@ -105,34 +94,39 @@ public sealed class TimeLensContext
                 error text NOT NULL
             );
 
-            CREATE INDEX IF NOT EXISTS ix_ingestion_executions_job_schedule_curve_created
-                ON ingestion_executions(job_id, schedule_id, curve_id, created_at DESC);
+            CREATE INDEX IF NOT EXISTS ix_ingestion_executions_job_schedule_series_created
+                ON ingestion_executions(job_id, schedule_id, series_id, created_at DESC);
 
-            CREATE TABLE IF NOT EXISTS energy_datasets (
+            CREATE TABLE IF NOT EXISTS market_data_series (
                 id text PRIMARY KEY,
-                curve_id text NOT NULL,
-                source text NOT NULL,
+                series_id text NOT NULL,
+                provider text NOT NULL,
+                exchange text NOT NULL,
+                symbol text NOT NULL,
+                asset_class text NOT NULL,
+                base_asset text NOT NULL,
+                quote_asset text NOT NULL,
+                market_data_type text NOT NULL,
+                timeframe text NOT NULL,
+                currency text NOT NULL,
+                time_zone text NOT NULL,
+                provider_instrument_id text NOT NULL,
                 endpoint text NOT NULL,
-                metric text NOT NULL,
-                data_kind text NOT NULL DEFAULT 'actual',
-                category text NOT NULL DEFAULT 'unknown',
                 unit text NOT NULL,
-                country text NOT NULL,
-                bidding_zone text NOT NULL,
-                region text NOT NULL,
-                granularity text NOT NULL,
-                production_type text NOT NULL,
-                forecast_type text NOT NULL,
-                neighbor text NOT NULL,
+                calendar text NOT NULL,
                 license_info text NOT NULL,
                 deprecated boolean NOT NULL,
                 request_parameters jsonb NOT NULL,
+                provider_metadata jsonb NOT NULL,
+                user_metadata jsonb NOT NULL,
+                first_available_at timestamptz NULL,
+                last_available_at timestamptz NULL,
                 first_observed_at timestamptz NOT NULL,
                 last_ingested_at timestamptz NOT NULL
             );
 
-            CREATE INDEX IF NOT EXISTS ix_energy_datasets_filters
-                ON energy_datasets(endpoint, curve_id, metric, data_kind, category, country, bidding_zone, region, granularity);
+            CREATE INDEX IF NOT EXISTS ix_market_data_series_filters
+                ON market_data_series(provider, exchange, symbol, asset_class, market_data_type, timeframe);
 
             CREATE TABLE IF NOT EXISTS execution_definitions (
                 id text PRIMARY KEY,
@@ -161,9 +155,6 @@ public sealed class TimeLensContext
                 rule jsonb NOT NULL
             );
 
-            CREATE INDEX IF NOT EXISTS ix_execution_definition_targets_definition
-                ON execution_definition_targets(definition_id);
-
             CREATE TABLE IF NOT EXISTS execution_definition_plugins (
                 id text PRIMARY KEY,
                 definition_id text NOT NULL REFERENCES execution_definitions(id) ON DELETE CASCADE,
@@ -174,9 +165,6 @@ public sealed class TimeLensContext
                 severity jsonb NOT NULL,
                 sort_order integer NOT NULL
             );
-
-            CREATE INDEX IF NOT EXISTS ix_execution_definition_plugins_definition
-                ON execution_definition_plugins(definition_id, enabled, sort_order);
 
             CREATE TABLE IF NOT EXISTS execution_runs (
                 id text PRIMARY KEY,
@@ -195,9 +183,6 @@ public sealed class TimeLensContext
                 error text NOT NULL
             );
 
-            CREATE INDEX IF NOT EXISTS ix_execution_runs_definition_queued
-                ON execution_runs(definition_id, queued_at DESC);
-
             CREATE TABLE IF NOT EXISTS execution_results (
                 id text PRIMARY KEY,
                 run_id text NOT NULL REFERENCES execution_runs(id) ON DELETE CASCADE,
@@ -211,10 +196,7 @@ public sealed class TimeLensContext
                 created_at timestamptz NOT NULL
             );
 
-            CREATE INDEX IF NOT EXISTS ix_execution_results_run_plugin
-                ON execution_results(run_id, plugin_id);
-
-            CREATE TABLE IF NOT EXISTS quality_curve_groups (
+            CREATE TABLE IF NOT EXISTS quality_series_groups (
                 id text PRIMARY KEY,
                 name text NOT NULL,
                 description text NOT NULL,
@@ -226,19 +208,13 @@ public sealed class TimeLensContext
                 updated_at timestamptz NOT NULL
             );
 
-            CREATE INDEX IF NOT EXISTS ix_quality_curve_groups_enabled_type
-                ON quality_curve_groups(enabled, group_type);
-
-            CREATE TABLE IF NOT EXISTS quality_curve_group_members (
-                group_id text NOT NULL REFERENCES quality_curve_groups(id) ON DELETE CASCADE,
+            CREATE TABLE IF NOT EXISTS quality_series_group_members (
+                group_id text NOT NULL REFERENCES quality_series_groups(id) ON DELETE CASCADE,
                 dataset_id text NOT NULL,
-                curve_id text NOT NULL,
+                series_id text NOT NULL,
                 created_at timestamptz NOT NULL,
                 PRIMARY KEY (group_id, dataset_id)
             );
-
-            CREATE INDEX IF NOT EXISTS ix_quality_curve_group_members_dataset
-                ON quality_curve_group_members(dataset_id, curve_id);
 
             CREATE TABLE IF NOT EXISTS quality_validation_plugins (
                 id text PRIMARY KEY,
@@ -254,9 +230,6 @@ public sealed class TimeLensContext
                 updated_at timestamptz NOT NULL
             );
 
-            CREATE INDEX IF NOT EXISTS ix_quality_validation_plugins_usage
-                ON quality_validation_plugins(usage, category);
-
             CREATE TABLE IF NOT EXISTS quality_validation_templates (
                 id text PRIMARY KEY,
                 name text NOT NULL,
@@ -267,7 +240,7 @@ public sealed class TimeLensContext
             );
 
             INSERT INTO quality_validation_templates (id, name, description, tags, created_at, updated_at)
-            VALUES ('default-validation-template', 'Default validation template', 'Default template for existing validation schedules.', '{}'::jsonb, now(), now())
+            VALUES ('default-validation-template', 'Default validation template', 'Default template for validation schedules.', '{}'::jsonb, now(), now())
             ON CONFLICT (id) DO NOTHING;
 
             CREATE TABLE IF NOT EXISTS quality_validation_jobs (
@@ -288,21 +261,12 @@ public sealed class TimeLensContext
                 updated_at timestamptz NOT NULL
             );
 
-            CREATE INDEX IF NOT EXISTS ix_quality_validation_jobs_enabled
-                ON quality_validation_jobs(enabled, updated_at DESC);
-
-            CREATE INDEX IF NOT EXISTS ix_quality_validation_jobs_template_enabled
-                ON quality_validation_jobs(template_id, enabled, updated_at DESC);
-
             CREATE TABLE IF NOT EXISTS quality_validation_job_targets (
                 job_id text NOT NULL REFERENCES quality_validation_jobs(id) ON DELETE CASCADE,
                 target_type text NOT NULL,
                 target_id text NOT NULL,
                 rule jsonb NOT NULL
             );
-
-            CREATE INDEX IF NOT EXISTS ix_quality_validation_job_targets_job
-                ON quality_validation_job_targets(job_id);
 
             CREATE TABLE IF NOT EXISTS quality_validation_job_checks (
                 id text PRIMARY KEY,
@@ -314,9 +278,6 @@ public sealed class TimeLensContext
                 severity jsonb NOT NULL,
                 sort_order integer NOT NULL
             );
-
-            CREATE INDEX IF NOT EXISTS ix_quality_validation_job_checks_job
-                ON quality_validation_job_checks(job_id, enabled, sort_order);
 
             CREATE TABLE IF NOT EXISTS quality_validation_executions (
                 id text PRIMARY KEY,
@@ -338,14 +299,11 @@ public sealed class TimeLensContext
                 error text NOT NULL
             );
 
-            CREATE INDEX IF NOT EXISTS ix_quality_validation_executions_job_queued
-                ON quality_validation_executions(job_id, queued_at DESC);
-
             CREATE TABLE IF NOT EXISTS quality_validation_target_executions (
                 id text PRIMARY KEY,
                 execution_id text NOT NULL REFERENCES quality_validation_executions(id) ON DELETE CASCADE,
                 dataset_id text NOT NULL,
-                curve_id text NOT NULL,
+                series_id text NOT NULL,
                 status text NOT NULL,
                 started_at timestamptz NULL,
                 finished_at timestamptz NULL,
@@ -354,9 +312,6 @@ public sealed class TimeLensContext
                 point_count integer NOT NULL,
                 error text NOT NULL
             );
-
-            CREATE INDEX IF NOT EXISTS ix_quality_validation_target_executions_curve
-                ON quality_validation_target_executions(dataset_id, curve_id, started_at DESC);
 
             CREATE TABLE IF NOT EXISTS quality_validator_executions (
                 id text PRIMARY KEY,
@@ -369,16 +324,13 @@ public sealed class TimeLensContext
                 error text NOT NULL
             );
 
-            CREATE INDEX IF NOT EXISTS ix_quality_validator_executions_target
-                ON quality_validator_executions(target_execution_id, validator_id);
-
             CREATE TABLE IF NOT EXISTS quality_findings (
                 id text PRIMARY KEY,
                 execution_id text NOT NULL,
                 target_execution_id text NULL,
                 validator_execution_id text NULL,
                 dataset_id text NOT NULL,
-                curve_id text NOT NULL,
+                series_id text NOT NULL,
                 validator_id text NOT NULL,
                 category text NOT NULL,
                 severity text NOT NULL,
@@ -399,15 +351,12 @@ public sealed class TimeLensContext
                 updated_at timestamptz NOT NULL
             );
 
-            CREATE INDEX IF NOT EXISTS ix_quality_findings_active_curve
-                ON quality_findings(active, dataset_id, curve_id, severity, updated_at DESC);
-
-            CREATE INDEX IF NOT EXISTS ix_quality_findings_fingerprint
-                ON quality_findings(fingerprint, active, updated_at DESC);
+            CREATE INDEX IF NOT EXISTS ix_quality_findings_active_series
+                ON quality_findings(active, dataset_id, series_id, severity, updated_at DESC);
 
             CREATE TABLE IF NOT EXISTS quality_status_snapshots (
                 dataset_id text NOT NULL,
-                curve_id text NOT NULL,
+                series_id text NOT NULL,
                 overall_status text NOT NULL,
                 category_statuses jsonb NOT NULL,
                 latest_execution_id text NOT NULL,
@@ -415,37 +364,8 @@ public sealed class TimeLensContext
                 PRIMARY KEY (dataset_id, as_of)
             );
 
-            CREATE INDEX IF NOT EXISTS ix_quality_status_snapshots_curve_latest
-                ON quality_status_snapshots(dataset_id, curve_id, as_of DESC);
-
-            ALTER TABLE ingestion_schedules ADD COLUMN IF NOT EXISTS default_cron_expression text NOT NULL DEFAULT '';
-            ALTER TABLE ingestion_schedules ADD COLUMN IF NOT EXISTS window_start_expression text NOT NULL DEFAULT 'now-48h';
-            ALTER TABLE ingestion_schedules ADD COLUMN IF NOT EXISTS window_end_expression text NOT NULL DEFAULT 'now';
-            ALTER TABLE ingestion_schedules ADD COLUMN IF NOT EXISTS default_window_start_expression text NOT NULL DEFAULT 'now-48h';
-            ALTER TABLE ingestion_schedules ADD COLUMN IF NOT EXISTS default_window_end_expression text NOT NULL DEFAULT 'now';
-            ALTER TABLE ingestion_schedules ADD COLUMN IF NOT EXISTS source text NOT NULL DEFAULT 'energy-charts';
-            ALTER TABLE energy_datasets ADD COLUMN IF NOT EXISTS data_kind text NOT NULL DEFAULT 'actual';
-            ALTER TABLE energy_datasets ADD COLUMN IF NOT EXISTS category text NOT NULL DEFAULT 'unknown';
-            ALTER TABLE quality_validation_jobs ADD COLUMN IF NOT EXISTS template_id text NOT NULL DEFAULT 'default-validation-template' REFERENCES quality_validation_templates(id);
-            ALTER TABLE quality_validation_jobs ADD COLUMN IF NOT EXISTS last_queued_at timestamptz NULL;
-
-            UPDATE energy_datasets
-            SET data_kind = CASE
-                    WHEN forecast_type <> '' OR metric LIKE '%forecast%' THEN 'forecast'
-                    WHEN endpoint = 'installed_power' THEN 'reference'
-                    ELSE data_kind
-                END,
-                category = CASE
-                    WHEN endpoint IN ('public_power', 'total_power', 'public_power_forecast') THEN 'power'
-                    WHEN endpoint = 'installed_power' THEN 'capacity'
-                    WHEN endpoint = 'price' THEN 'price'
-                    WHEN endpoint IN ('cbet', 'cbpf') THEN 'exchange'
-                    WHEN endpoint LIKE '%share%' THEN 'share'
-                    WHEN endpoint = 'frequency' THEN 'frequency'
-                    WHEN endpoint = 'signal' THEN 'signal'
-                    ELSE category
-                END
-            WHERE data_kind = 'actual' OR category = 'unknown';
+            CREATE INDEX IF NOT EXISTS ix_quality_status_snapshots_series_latest
+                ON quality_status_snapshots(dataset_id, series_id, as_of DESC);
             """;
 
         await using var command = Postgres.CreateCommand(sql);
@@ -458,41 +378,20 @@ public sealed class TimeLensContext
         await connection.OpenAsync(cancellationToken);
 
         await ExecuteClickHouseAsync(connection, """
-            CREATE TABLE IF NOT EXISTS actual_energy_time_series_points (
-                dataset_id String,
+            CREATE TABLE IF NOT EXISTS market_ohlcv_bars (
+                series_id String,
                 timestamp DateTime64(3, 'UTC'),
-                value Nullable(Float64),
+                open Float64,
+                high Float64,
+                low Float64,
+                close Float64,
+                volume Float64,
                 as_of DateTime64(3, 'UTC'),
                 inserted_at DateTime64(3, 'UTC'),
                 source_metadata_version String
             )
             ENGINE = MergeTree
-            ORDER BY (dataset_id, timestamp, as_of)
-            """, cancellationToken);
-
-        await ExecuteClickHouseAsync(connection, """
-            CREATE TABLE IF NOT EXISTS forecast_energy_time_series_points (
-                dataset_id String,
-                timestamp DateTime64(3, 'UTC'),
-                value Nullable(Float64),
-                as_of DateTime64(3, 'UTC'),
-                inserted_at DateTime64(3, 'UTC'),
-                source_metadata_version String
-            )
-            ENGINE = MergeTree
-            ORDER BY (dataset_id, timestamp, as_of)
-            """, cancellationToken);
-
-        await ExecuteClickHouseAsync(connection, """
-            CREATE TABLE IF NOT EXISTS power_productions (
-                meter_point_id String,
-                production_datetime DateTime64(3, 'UTC'),
-                production Int32,
-                as_of DateTime64(3, 'UTC'),
-                inserted_at DateTime64(3, 'UTC')
-            )
-            ENGINE = MergeTree
-            ORDER BY (meter_point_id, production_datetime, as_of)
+            ORDER BY (series_id, timestamp, as_of)
             """, cancellationToken);
     }
 

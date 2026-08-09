@@ -15,8 +15,11 @@ public class IngestionWriteClient(IngestionWrite.IngestionWriteClient client)
         request.Points.AddRange(batch.Points.Select(x => new TimeSeriesWritePointMessage
         {
             UnixSeconds = x.Timestamp.ToUnixTimeSeconds(),
-            HasValue = x.Value.HasValue,
-            Value = x.Value ?? 0
+            Open = x.Open,
+            High = x.High,
+            Low = x.Low,
+            Close = x.Close,
+            Volume = x.Volume
         }));
 
         var response = await client.InsertTimeSeriesBatchAsync(request, cancellationToken: cancellationToken);
