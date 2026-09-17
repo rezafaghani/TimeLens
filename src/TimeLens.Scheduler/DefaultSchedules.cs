@@ -36,6 +36,31 @@ public static class DefaultSchedules
             }
         }
 
+        foreach (var biddingZone in new[] { "DK1", "DK2" })
+        {
+            schedules.Add(new IngestionSchedule
+            {
+                Id = $"energy-charts-{biddingZone.ToLowerInvariant()}-day-ahead-price",
+                Name = $"{biddingZone} day-ahead electricity price",
+                SeriesId = $"energy-charts:{biddingZone}:day-ahead-price".ToLowerInvariant(),
+                Source = "energy-charts",
+                Endpoint = "price",
+                Parameters = new Dictionary<string, string>
+                {
+                    ["bzn"] = biddingZone,
+                    ["timeframe"] = "1h"
+                },
+                CronExpression = "15 * * * *",
+                DefaultCronExpression = "15 * * * *",
+                LookbackHours = 48,
+                WindowStartExpression = "now-48h",
+                WindowEndExpression = "now+24h",
+                DefaultWindowStartExpression = "now-48h",
+                DefaultWindowEndExpression = "now+24h",
+                BatchSize = 500
+            });
+        }
+
         return schedules;
     }
 

@@ -1,6 +1,9 @@
 using System.Text;
 using System.Text.Json;
+using System.Diagnostics;
 using TimeLens.Domain.Models;
+using TimeLens.Domain.Observability;
+using TimeLens.Infrastructure.Observability;
 using Microsoft.Extensions.Options;
 using RabbitMQ.Client;
 
@@ -49,6 +52,13 @@ public class RabbitMqJobPublisher(IOptions<RabbitMqOptions> options) : IValidati
 
     private async Task PublishOnceAsync<T>(T message, string queueName, string messageId, string messageType, CancellationToken cancellationToken)
     {
+        using var activity = TimeLensTelemetry.ActivitySource.StartActivity($"RabbitMQ Publish {messageType}", ActivityKind.Producer);
+        activity?.SetTag("messaging.system", "rabbitmq");
+        activity?.SetTag("messaging.destination.name", queueName);
+        activity?.SetTag("messaging.operation.name", "publish");
+        activity?.SetTag("messaging.message.id", messageId);
+        activity?.SetTag("messaging.message.type", messageType);
+
         var factory = new ConnectionFactory
         {
             HostName = _options.HostName,
@@ -76,6 +86,7 @@ public class RabbitMqJobPublisher(IOptions<RabbitMqOptions> options) : IValidati
             MessageId = messageId,
             Type = messageType
         };
+        RabbitMqTraceContext.Inject(properties);
 
         await channel.BasicPublishAsync(
             exchange: _options.ExchangeName,
@@ -84,5 +95,6 @@ public class RabbitMqJobPublisher(IOptions<RabbitMqOptions> options) : IValidati
             basicProperties: properties,
             body: body,
             cancellationToken: cancellationToken);
+        TimeLensTelemetry.MessagesPublished.Add(1, KeyValuePair.Create<string, object?>("messaging.destination.name", queueName));
     }
 }

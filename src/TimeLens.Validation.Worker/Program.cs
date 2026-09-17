@@ -4,10 +4,12 @@ using TimeLens.Domain.Services;
 using TimeLens.Infrastructure;
 using TimeLens.Infrastructure.Repositories;
 using TimeLens.Infrastructure.Services;
+using TimeLens.Infrastructure.Observability;
 using TimeLens.Validation;
 using TimeLens.Validation.Worker;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.AddTimeLensObservability("timelens-validation-worker");
 
 builder.Services.Configure<RabbitMqOptions>(builder.Configuration.GetSection("RabbitMq"));
 builder.Services.AddSingleton<TimeLensContext>(sp =>
@@ -32,6 +34,7 @@ builder.Host.UseOrleans(siloBuilder =>
     siloBuilder.UseLocalhostClustering();
 });
 builder.Services.AddHostedService<ValidationJobConsumer>();
+builder.Services.AddHealthChecks();
 
 var app = builder.Build();
 await InitializeAsync(app.Services);
@@ -39,6 +42,7 @@ await RegisterValidationPluginsAsync(app.Services);
 
 app.MapGet("/validation/plugins", (IEnumerable<IExecutionPlugin> plugins) =>
     plugins.Select(x => x.Metadata).OrderBy(x => x.Id));
+app.MapHealthChecks("/health");
 
 app.MapPost("/validation/evaluate", async (
     ManualQualityEvaluationRequest request,

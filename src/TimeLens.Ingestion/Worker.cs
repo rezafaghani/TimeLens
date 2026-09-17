@@ -1,6 +1,9 @@
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using TimeLens.Domain.Models;
+using TimeLens.Domain.Observability;
+using TimeLens.Infrastructure.Observability;
 using TimeLens.Ingestion.Grains;
 using Microsoft.Extensions.Options;
 using Orleans;
@@ -61,6 +64,12 @@ public class Worker(
         var consumer = new AsyncEventingBasicConsumer(channel);
         consumer.ReceivedAsync += async (_, eventArgs) =>
         {
+            var parent = RabbitMqTraceContext.Extract(eventArgs.BasicProperties);
+            using var activity = TimeLensTelemetry.ActivitySource.StartActivity("RabbitMQ Consume IngestionJobMessage", ActivityKind.Consumer, parent.ActivityContext);
+            activity?.SetTag("messaging.system", "rabbitmq");
+            activity?.SetTag("messaging.destination.name", rabbitOptions.QueueName);
+            activity?.SetTag("messaging.operation.name", "consume");
+            activity?.SetTag("messaging.message.id", eventArgs.BasicProperties.MessageId);
             try
             {
                 var json = Encoding.UTF8.GetString(eventArgs.Body.ToArray());
@@ -71,17 +80,31 @@ public class Worker(
                     return;
                 }
 
-                if (message.Source != "coinbase-exchange")
+                activity?.SetTag("timelens.job.id", message.JobId);
+                activity?.SetTag("timelens.execution.id", message.ExecutionId);
+                activity?.SetTag("market.provider", message.Source);
+                activity?.SetTag("market.series_id", message.SeriesId);
+                if (message.Source == "coinbase-exchange")
+                {
+                    var grain = grainFactory.GetGrain<ICoinbaseCandleGrain>(message.SeriesId);
+                    await grain.IngestAsync(json, stoppingToken);
+                }
+                else if (message.Source == "energy-charts")
+                {
+                    var grain = grainFactory.GetGrain<IEnergyChartsPriceGrain>(message.SeriesId);
+                    await grain.IngestAsync(json, stoppingToken);
+                }
+                else
                 {
                     throw new InvalidOperationException($"Ingestion source '{message.Source}' is not supported.");
                 }
-
-                var grain = grainFactory.GetGrain<ICoinbaseCandleGrain>(message.SeriesId);
-                await grain.IngestAsync(json, stoppingToken);
+                TimeLensTelemetry.MessagesConsumed.Add(1, KeyValuePair.Create<string, object?>("messaging.destination.name", rabbitOptions.QueueName));
                 await channel.BasicAckAsync(eventArgs.DeliveryTag, multiple: false, cancellationToken: stoppingToken);
             }
             catch (Exception ex)
             {
+                activity.RecordException(ex);
+                TimeLensTelemetry.MessageFailures.Add(1, KeyValuePair.Create<string, object?>("messaging.destination.name", rabbitOptions.QueueName));
                 logger.LogError(ex, "Failed to process ingestion job message.");
                 await channel.BasicAckAsync(eventArgs.DeliveryTag, multiple: false, cancellationToken: stoppingToken);
             }

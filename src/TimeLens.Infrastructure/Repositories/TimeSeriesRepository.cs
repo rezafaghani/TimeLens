@@ -1,5 +1,6 @@
 using TimeLens.Domain.Interfaces;
 using TimeLens.Domain.Models;
+using TimeLens.Domain.Observability;
 
 namespace TimeLens.Infrastructure.Repositories;
 
@@ -9,6 +10,12 @@ public class TimeSeriesRepository(TimeLensContext context, IMarketDataUpdatePubl
 
     public async Task<TimeSeriesInsertResult> InsertBatchAsync(TimeSeriesBatchRequest request, CancellationToken cancellationToken = default)
     {
+        using var activity = TimeLensTelemetry.ActivitySource.StartActivity("ClickHouse InsertBatch");
+        activity?.SetTag("db.system.name", "clickhouse");
+        activity?.SetTag("db.operation.name", "insert");
+        activity?.SetTag("db.collection.name", BarsTable);
+        activity?.SetTag("timelens.dataset_id", request.DatasetId);
+        activity?.SetTag("timelens.record_count", request.Points.Count);
         var insertTime = DateTimeOffset.UtcNow;
         var result = new TimeSeriesInsertResult { AsOf = insertTime };
 
@@ -58,6 +65,8 @@ public class TimeSeriesRepository(TimeLensContext context, IMarketDataUpdatePubl
             }
         }
 
+        activity?.SetTag("timelens.records_inserted", result.Inserted);
+        activity?.SetTag("timelens.records_skipped", result.Skipped);
         return result;
     }
 
@@ -69,6 +78,11 @@ public class TimeSeriesRepository(TimeLensContext context, IMarketDataUpdatePubl
         CancellationToken cancellationToken = default,
         int? limit = null)
     {
+        using var activity = TimeLensTelemetry.ActivitySource.StartActivity("ClickHouse ReadSeries");
+        activity?.SetTag("db.system.name", "clickhouse");
+        activity?.SetTag("db.operation.name", "select");
+        activity?.SetTag("db.collection.name", BarsTable);
+        activity?.SetTag("timelens.dataset_id", datasetId);
         await using var connection = context.CreateClickHouseConnection();
         await connection.OpenAsync(cancellationToken);
         await using var command = connection.CreateCommand();

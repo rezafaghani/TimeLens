@@ -4,9 +4,11 @@ using TimeLens.Contracts;
 using TimeLens.Domain.Interfaces;
 using TimeLens.Infrastructure;
 using TimeLens.Infrastructure.Repositories;
+using TimeLens.Infrastructure.Observability;
 using Grpc.Net.Client;
 
 var builder = Host.CreateApplicationBuilder(args);
+builder.AddTimeLensObservability("timelens-ingestion");
 
 builder.Services.Configure<IngestionOptions>(builder.Configuration.GetSection("Ingestion"));
 builder.Services.Configure<RabbitMqOptions>(builder.Configuration.GetSection("RabbitMq"));
@@ -23,9 +25,15 @@ builder.Services.AddHttpClient<CoinbaseCandleClient>(client =>
     client.BaseAddress = new Uri(builder.Configuration["Coinbase:BaseUrl"] ?? "https://api.exchange.coinbase.com/");
     client.DefaultRequestHeaders.UserAgent.ParseAdd("TimeLens/1.0");
 });
+builder.Services.AddHttpClient<EnergyChartsPriceClient>(client =>
+{
+    client.BaseAddress = new Uri(builder.Configuration["EnergyCharts:BaseUrl"] ?? "https://api.energy-charts.info/");
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("TimeLens/1.0");
+});
 builder.Services.AddSingleton<ProviderRateLimiter>();
 builder.Services.AddHttpClient<OAuthTokenProvider>();
 builder.Services.AddSingleton<CoinbaseCandleNormalizer>();
+builder.Services.AddSingleton<EnergyChartsPriceNormalizer>();
 builder.Services.AddScoped<IngestionWriteClient>();
 var grpcClientBuilder = builder.Services.AddGrpcClient<IngestionWrite.IngestionWriteClient>(options =>
 {
