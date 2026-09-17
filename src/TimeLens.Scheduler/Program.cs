@@ -3,9 +3,11 @@ using TimeLens.Domain.Models;
 using TimeLens.Infrastructure;
 using TimeLens.Infrastructure.Repositories;
 using TimeLens.Infrastructure.Services;
+using TimeLens.Infrastructure.Observability;
 using TimeLens.Scheduler;
 
 var builder = Host.CreateApplicationBuilder(args);
+builder.AddTimeLensObservability("timelens-scheduler");
 
 builder.Services.Configure<SchedulerOptions>(builder.Configuration.GetSection("Scheduler"));
 builder.Services.Configure<RabbitMqOptions>(builder.Configuration.GetSection("RabbitMq"));

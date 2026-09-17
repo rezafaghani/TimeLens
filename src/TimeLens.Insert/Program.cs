@@ -4,11 +4,13 @@ using TimeLens.Insert.Services;
 using TimeLens.Infrastructure;
 using TimeLens.Infrastructure.Repositories;
 using TimeLens.Infrastructure.Services;
+using TimeLens.Infrastructure.Observability;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Scalar.AspNetCore;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.AddTimeLensObservability("timelens-insert");
 builder.WebHost.ConfigureKestrel(options =>
 {
     options.ListenAnyIP(8080, listenOptions => listenOptions.Protocols = HttpProtocols.Http1);
@@ -18,6 +20,7 @@ builder.WebHost.ConfigureKestrel(options =>
 builder.Services.AddControllers();
 builder.Services.AddGrpc();
 builder.Services.AddOpenApi();
+builder.Services.AddHealthChecks();
 builder.Services.Configure<RabbitMqOptions>(builder.Configuration.GetSection("RabbitMq"));
 builder.Services.AddSingleton<TimeLensContext>(sp =>
 {
@@ -78,6 +81,7 @@ if (authEnabled)
 
 app.UseAuthorization();
 app.MapControllers();
+app.MapHealthChecks("/health");
 var grpc = app.MapGrpcService<IngestionWriteGrpcService>();
 if (authEnabled)
 {

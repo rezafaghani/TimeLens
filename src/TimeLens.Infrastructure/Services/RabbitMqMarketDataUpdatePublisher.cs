@@ -6,12 +6,13 @@ using Npgsql;
 using RabbitMQ.Client;
 using TimeLens.Domain.Interfaces;
 using TimeLens.Domain.Models;
+using TimeLens.Domain.Observability;
+using TimeLens.Infrastructure.Observability;
 
 namespace TimeLens.Infrastructure.Services;
 
 public class RabbitMqMarketDataUpdatePublisher(TimeLensContext context, IOptions<RabbitMqOptions> options) : IMarketDataUpdatePublisher
 {
-    private static readonly ActivitySource ActivitySource = new("TimeLens.MarketData.Live");
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly RabbitMqOptions _options = options.Value;
 
@@ -39,7 +40,10 @@ public class RabbitMqMarketDataUpdatePublisher(TimeLensContext context, IOptions
             Bar = point
         };
 
-        using var activity = ActivitySource.StartActivity("market_data.update.publish");
+        using var activity = TimeLensTelemetry.ActivitySource.StartActivity("MarketDataUpdatePublication", ActivityKind.Producer);
+        activity?.SetTag("messaging.system", "rabbitmq");
+        activity?.SetTag("messaging.destination.name", _options.MarketDataUpdatesQueueName);
+        activity?.SetTag("messaging.operation.name", "publish");
         activity?.SetTag("market.provider", message.ProviderId);
         activity?.SetTag("market.symbol", message.Symbol);
         activity?.SetTag("market.timeframe", message.Timeframe);
@@ -74,8 +78,10 @@ public class RabbitMqMarketDataUpdatePublisher(TimeLensContext context, IOptions
             Type = nameof(MarketDataUpdatedEvent),
             Timestamp = new AmqpTimestamp(DateTimeOffset.UtcNow.ToUnixTimeSeconds())
         };
+        RabbitMqTraceContext.Inject(properties);
         var body = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(message, JsonOptions));
         await channel.BasicPublishAsync(_options.ExchangeName, _options.MarketDataUpdatesQueueName, true, properties, body, cancellationToken);
+        TimeLensTelemetry.MessagesPublished.Add(1, KeyValuePair.Create<string, object?>("messaging.destination.name", _options.MarketDataUpdatesQueueName));
     }
 
     private async Task<DatasetMetadataDto?> GetMetadataAsync(string datasetId, CancellationToken cancellationToken)

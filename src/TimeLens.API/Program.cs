@@ -1,8 +1,10 @@
 using Scalar.AspNetCore;
 using TimeLens.API.Hubs;
+using TimeLens.Infrastructure.Observability;
 var  myAllowSpecificOrigins = "_myAllowSpecificOrigins";
 var builder = WebApplication.CreateBuilder(args);
 
+builder.AddTimeLensObservability("timelens-api");
 // Add services to the container.
 
 
@@ -25,6 +27,7 @@ builder.Services.AddCors(options =>
 });
 builder.Services.AddControllers();
 builder.Services.AddSignalR();
+builder.Services.AddHealthChecks();
 var app = builder.Build();
 
 // Perform database initialization
@@ -45,6 +48,7 @@ app.UseAuthorization();
 
 app.MapControllers();
 app.MapHub<MarketDataHub>("/hubs/market-data");
+app.MapHealthChecks("/health");
 
 
 

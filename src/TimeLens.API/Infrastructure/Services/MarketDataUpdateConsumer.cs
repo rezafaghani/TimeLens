@@ -7,6 +7,8 @@ using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
 using TimeLens.API.Hubs;
 using TimeLens.Domain.Models;
+using TimeLens.Domain.Observability;
+using TimeLens.Infrastructure.Observability;
 
 namespace TimeLens.API.Infrastructure.Services;
 
@@ -15,7 +17,6 @@ public class MarketDataUpdateConsumer(
     IOptions<RabbitMqOptions> options,
     ILogger<MarketDataUpdateConsumer> logger) : BackgroundService
 {
-    private static readonly ActivitySource ActivitySource = new("TimeLens.MarketData.Live");
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -66,19 +67,31 @@ public class MarketDataUpdateConsumer(
         var consumer = new AsyncEventingBasicConsumer(channel);
         consumer.ReceivedAsync += async (_, args) =>
         {
+            var parent = RabbitMqTraceContext.Extract(args.BasicProperties);
+            using var activity = TimeLensTelemetry.ActivitySource.StartActivity("RabbitMQ Consume MarketDataUpdatedEvent", ActivityKind.Consumer, parent.ActivityContext);
+            activity?.SetTag("messaging.system", "rabbitmq");
+            activity?.SetTag("messaging.destination.name", rabbit.MarketDataUpdatesQueueName);
+            activity?.SetTag("messaging.operation.name", "consume");
+            activity?.SetTag("messaging.message.id", args.BasicProperties.MessageId);
             try
             {
                 var json = Encoding.UTF8.GetString(args.Body.ToArray());
                 var message = JsonSerializer.Deserialize<MarketDataUpdatedEvent>(json, JsonOptions);
                 if (message is not null)
                 {
+                    activity?.SetTag("market.provider", message.ProviderId);
+                    activity?.SetTag("market.symbol", message.Symbol);
+                    activity?.SetTag("market.timeframe", message.Timeframe);
                     await DispatchAsync(message, stoppingToken);
+                    TimeLensTelemetry.MessagesConsumed.Add(1, KeyValuePair.Create<string, object?>("messaging.destination.name", rabbit.MarketDataUpdatesQueueName));
                 }
 
                 await channel.BasicAckAsync(args.DeliveryTag, false, stoppingToken);
             }
             catch (Exception ex)
             {
+                activity.RecordException(ex);
+                TimeLensTelemetry.MessageFailures.Add(1, KeyValuePair.Create<string, object?>("messaging.destination.name", rabbit.MarketDataUpdatesQueueName));
                 logger.LogError(ex, "Failed to dispatch market-data update.");
                 await channel.BasicAckAsync(args.DeliveryTag, false, stoppingToken);
             }
@@ -92,7 +105,7 @@ public class MarketDataUpdateConsumer(
     private async Task DispatchAsync(MarketDataUpdatedEvent message, CancellationToken cancellationToken)
     {
         var group = MarketDataLiveGroups.For(message);
-        using var activity = ActivitySource.StartActivity("market_data.live.dispatch");
+        using var activity = TimeLensTelemetry.ActivitySource.StartActivity("LiveUpdateDispatch");
         activity?.SetTag("market.subscription_group", group);
         activity?.SetTag("market.provider", message.ProviderId);
         activity?.SetTag("market.symbol", message.Symbol);
@@ -101,6 +114,7 @@ public class MarketDataUpdateConsumer(
         activity?.SetTag("messaging.message_id", message.EventId);
 
         await hub.Clients.Group(group).SendAsync("MarketDataUpdated", message, cancellationToken);
+        TimeLensTelemetry.LiveUpdatesDispatched.Add(1, KeyValuePair.Create<string, object?>("market.provider", message.ProviderId));
         logger.LogInformation(
             "Dispatched market-data update {EventId} to {Group} for {Provider} {Symbol} {Timeframe}.",
             message.EventId,

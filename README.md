@@ -2,11 +2,12 @@
 
 TimeLens is a provider-agnostic time-series and market-data intelligence platform.
 
-The first supported market-data domain is cryptocurrency OHLCV bars from Coinbase Exchange. The core architecture stays generic so equities, ETFs, indexes, forex, and other providers can be added later without redesigning ingestion, validation, storage, or visualization.
+The first supported market-data domains are cryptocurrency OHLCV bars from Coinbase Exchange and European day-ahead electricity prices from Energy-Charts. The core architecture stays generic so equities, ETFs, indexes, forex, and other providers can be added later without redesigning ingestion, validation, storage, or visualization.
 
 ## What It Does
 
 - Browse market instruments such as `BTC-USD` and `ETH-USD`.
+- Browse energy-market series such as Danish `DK1` and `DK2` day-ahead electricity prices.
 - Inspect OHLCV bars in charts and tables.
 - Track ingestion schedules, queued jobs, executions, inserted rows, skipped rows, and failures.
 - Queue manual historical backloads.
@@ -53,6 +54,8 @@ TimeLens is not a cryptocurrency trading bot and does not place trades.
 | `postgres` | Metadata, schedules, jobs, executions, validation history | `5432` |
 | `clickhouse` | Versioned OHLCV bars | `8123`, `9000` |
 | `rabbitmq` | RabbitMQ broker and management UI | `5672`, `15672` |
+| `skywalking-ui` | SkyWalking UI for local observability | `8081` |
+| `otel-collector` | Receives TimeLens OTLP telemetry and forwards it to SkyWalking OAP | `4317`, `4318` |
 
 ## Useful APIs
 
@@ -78,8 +81,38 @@ Then open:
 
 - UI: `http://localhost:8080`
 - RabbitMQ management: `http://localhost:15672`
+- SkyWalking UI: `http://localhost:8081`
+- SkyWalking OTLP traces: `http://localhost:8081/zipkin`
 
 Use `podman compose` instead of `docker compose` if that is your local runtime.
+
+## Observability
+
+TimeLens services export OpenTelemetry traces and metrics to the local OpenTelemetry Collector. The Collector forwards them to SkyWalking OAP. Runtime logs stay on the normal console path by default; set `OTEL_EXPORT_LOGS=true` if you explicitly want to test OTLP log export.
+
+```text
+TimeLens Services
+  -> OTLP
+  -> OpenTelemetry Collector
+  -> SkyWalking OAP
+  -> SkyWalking UI
+```
+
+SkyWalking 10.4 stores OTLP traces through its Zipkin-compatible trace path. If the APM service list is populated but trace search looks empty, open `http://localhost:8081/zipkin` and search for services such as `timelens-api`, `timelens-ingestion`, or `timelens-insert`.
+
+### SkyWalking Dashboard
+
+Local compose enables SkyWalking dashboard editing with `SKYWALKING_ENABLE_DASHBOARD_EDIT=true`.
+
+To create a TimeLens dashboard:
+
+1. Open `http://localhost:8081`.
+2. Go to `Dashboards`.
+3. Choose `New Dashboard`.
+4. Use layer `GENERAL` and service widgets for `timelens-api`, `timelens-ingestion`, `timelens-insert`, `timelens-scheduler`, and `timelens-validation-worker`.
+5. Use `http://localhost:8081/zipkin` for OTLP trace drill-down.
+
+Keep this enabled for local development only. For shared or production-like deployments, set `SKYWALKING_ENABLE_DASHBOARD_EDIT=false`.
 
 ## Local Development
 
@@ -113,6 +146,7 @@ cd src/TimeLens.Client && npm test
 
 ## Notes
 
-- Current seeded instruments are `BTC-USD` and `ETH-USD`.
-- Current market-data type is OHLCV bars.
+- Current seeded crypto instruments are `BTC-USD` and `ETH-USD`.
+- Current seeded energy series are Energy-Charts `DK1` and `DK2` day-ahead prices in `EUR / MWh`.
+- Current market-data types are OHLCV bars and electricity prices.
 - Provider credentials must come from environment variables or secret configuration. Do not commit API keys.

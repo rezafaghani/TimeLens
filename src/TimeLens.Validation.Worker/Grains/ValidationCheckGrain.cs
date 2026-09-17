@@ -1,3 +1,4 @@
+using System.Text.Json;
 using TimeLens.Domain.Interfaces;
 using TimeLens.Domain.Models;
 using TimeLens.Domain.Services;
@@ -10,7 +11,7 @@ public class ValidationCheckGrain(
     IEnumerable<IExecutionPlugin> plugins,
     IMarketDataReader marketDataReader) : Grain, IValidationCheckGrain
 {
-    public async Task<List<ExecutionStepResultDto>> ValidateAsync(ValidationCheckMessage message)
+    public async Task<string> ValidateAsync(ValidationCheckMessage message)
     {
         var plugin = plugins.SingleOrDefault(x =>
             x.Metadata.Id.Equals(message.ValidatorId, StringComparison.OrdinalIgnoreCase)
@@ -23,7 +24,7 @@ public class ValidationCheckGrain(
         var marketData = await marketDataReader.ReadAsync(message.TargetType, message.TargetId, message.Start, message.End);
         if (marketData is null)
         {
-            return [];
+            return "[]";
         }
 
         var context = new ExecutionPluginContext(
@@ -31,9 +32,16 @@ public class ValidationCheckGrain(
             message.TargetId,
             message.Start,
             message.End,
-            message.Configuration,
+            ParseConfiguration(message.ConfigurationJson),
             marketData.Metadata,
             marketData.Points);
-        return await plugin.ExecuteAsync(context);
+        var results = await plugin.ExecuteAsync(context);
+        return JsonSerializer.Serialize(results);
+    }
+
+    private static JsonElement ParseConfiguration(string configurationJson)
+    {
+        using var document = JsonDocument.Parse(string.IsNullOrWhiteSpace(configurationJson) ? "{}" : configurationJson);
+        return document.RootElement.Clone();
     }
 }

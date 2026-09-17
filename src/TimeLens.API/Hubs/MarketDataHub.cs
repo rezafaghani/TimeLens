@@ -1,13 +1,12 @@
 using System.Diagnostics;
 using Microsoft.AspNetCore.SignalR;
 using TimeLens.API.Infrastructure.Services;
+using TimeLens.Domain.Observability;
 
 namespace TimeLens.API.Hubs;
 
 public class MarketDataHub(ILogger<MarketDataHub> logger) : Hub
 {
-    private static readonly ActivitySource ActivitySource = new("TimeLens.MarketData.Live");
-
     public async Task Subscribe(MarketDataSubscription subscription)
     {
         var group = MarketDataLiveGroups.For(
@@ -18,7 +17,7 @@ public class MarketDataHub(ILogger<MarketDataHub> logger) : Hub
             subscription.MarketDataType,
             subscription.Timeframe);
 
-        using var activity = ActivitySource.StartActivity("market_data.live.subscribe");
+        using var activity = TimeLensTelemetry.ActivitySource.StartActivity("LiveUpdateSubscribe");
         activity?.SetTag("signalr.connection_id", Context.ConnectionId);
         activity?.SetTag("market.subscription_group", group);
         activity?.SetTag("market.provider", subscription.ProviderId);

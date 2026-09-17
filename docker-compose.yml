@@ -1,5 +1,14 @@
 name: timelens
 
+x-timelens-observability-env: &timelens-observability-env
+  Observability__Enabled: ${OTEL_ENABLED:-true}
+  Observability__OtlpEndpoint: http://otel-collector:4317
+  Observability__Environment: ${DEPLOYMENT_ENVIRONMENT:-local}
+  Observability__SamplingRatio: ${OTEL_TRACES_SAMPLING_RATIO:-1.0}
+  Observability__ExportLogs: ${OTEL_EXPORT_LOGS:-true}
+  Logging__LogLevel__System.Net.Http: Warning
+  Logging__LogLevel__Microsoft.Extensions.Http: Warning
+
 services:
   postgres:
     image: postgres:17
@@ -52,11 +61,74 @@ services:
       timeout: 5s
       retries: 12
 
+  banyandb:
+    image: apache/skywalking-banyandb:${SKYWALKING_BANYANDB_VERSION:-0.10.3}
+    restart: unless-stopped
+    command: standalone
+    volumes:
+      - banyandb-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 17912"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+
+  skywalking-oap:
+    image: apache/skywalking-oap-server:${SKYWALKING_VERSION:-10.4.0}
+    restart: unless-stopped
+    environment:
+      SW_STORAGE: banyandb
+      SW_STORAGE_BANYANDB_TARGETS: banyandb:17912
+      SW_RECEIVER_ZIPKIN: default
+      SW_QUERY_ZIPKIN: default
+      SW_OTEL_RECEIVER: default
+      SW_OTEL_RECEIVER_ENABLED_HANDLERS: otlp-traces,otlp-metrics,otlp-logs
+      SW_ENABLE_UPDATE_UI_TEMPLATE: ${SKYWALKING_ENABLE_DASHBOARD_EDIT:-true}
+    depends_on:
+      banyandb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "bash", "-c", "</dev/tcp/localhost/11800 && </dev/tcp/localhost/12800"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  skywalking-ui:
+    image: apache/skywalking-ui:${SKYWALKING_VERSION:-10.4.0}
+    restart: unless-stopped
+    environment:
+      SW_OAP_ADDRESS: http://skywalking-oap:12800
+      SW_ZIPKIN_ADDRESS: http://skywalking-oap:9412
+    ports:
+      - "8081:8080"
+    depends_on:
+      skywalking-oap:
+        condition: service_healthy
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:${OTEL_COLLECTOR_VERSION:-0.132.0}
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol/config.yml"]
+    volumes:
+      - ./observability/otel-collector.yml:/etc/otelcol/config.yml:ro,Z
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+    depends_on:
+      skywalking-oap:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/otelcol-contrib", "--version"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
   api:
     build:
       context: .
       dockerfile: src/TimeLens.API/Dockerfile
     environment:
+      <<: *timelens-observability-env
       ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=${POSTGRES_DB:-timelens};Username=${POSTGRES_USER:-timelens};Password=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}"
       ConnectionStrings__ClickHouse: "Host=clickhouse;Port=8123;Protocol=http;Database=${CLICKHOUSE_DB:-timelens};Username=${CLICKHOUSE_USER:-default};Password=${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD is required}"
       RabbitMq__HostName: rabbitmq
@@ -71,6 +143,11 @@ services:
     ports:
       - "5100:8080"
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/8080'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
     depends_on:
       postgres:
         condition: service_healthy
@@ -78,12 +155,15 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      otel-collector:
+        condition: service_healthy
 
   insert:
     build:
       context: .
       dockerfile: src/TimeLens.Insert/Dockerfile
     environment:
+      <<: *timelens-observability-env
       ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=${POSTGRES_DB:-timelens};Username=${POSTGRES_USER:-timelens};Password=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}"
       ConnectionStrings__ClickHouse: "Host=clickhouse;Port=8123;Protocol=http;Database=${CLICKHOUSE_DB:-timelens};Username=${CLICKHOUSE_USER:-default};Password=${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD is required}"
       RabbitMq__HostName: rabbitmq
@@ -102,12 +182,17 @@ services:
         condition: service_healthy
       clickhouse:
         condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      otel-collector:
+        condition: service_healthy
 
   scheduler:
     build:
       context: .
       dockerfile: src/TimeLens.Scheduler/Dockerfile
     environment:
+      <<: *timelens-observability-env
       ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=${POSTGRES_DB:-timelens};Username=${POSTGRES_USER:-timelens};Password=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}"
       RabbitMq__HostName: rabbitmq
       RabbitMq__Port: 5672
@@ -125,12 +210,15 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      otel-collector:
+        condition: service_healthy
 
   validation-worker:
     build:
       context: .
       dockerfile: src/TimeLens.Validation.Worker/Dockerfile
     environment:
+      <<: *timelens-observability-env
       ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=${POSTGRES_DB:-timelens};Username=${POSTGRES_USER:-timelens};Password=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}"
       ConnectionStrings__ClickHouse: "Host=clickhouse;Port=8123;Protocol=http;Database=${CLICKHOUSE_DB:-timelens};Username=${CLICKHOUSE_USER:-default};Password=${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD is required}"
       RabbitMq__HostName: rabbitmq
@@ -150,12 +238,15 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      otel-collector:
+        condition: service_healthy
 
   ingestion:
     build:
       context: .
       dockerfile: src/TimeLens.Ingestion/Dockerfile
     environment:
+      <<: *timelens-observability-env
       ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=${POSTGRES_DB:-timelens};Username=${POSTGRES_USER:-timelens};Password=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}"
       InsertApi__GrpcUrl: http://insert:8081
       InsertApi__TokenEndpoint: ${INSERT_API_TOKEN_ENDPOINT:-}
@@ -175,6 +266,7 @@ services:
       Ingestion__MaxProviderRetries: 3
       Ingestion__RetryBaseDelaySeconds: 10
       Coinbase__BaseUrl: ${COINBASE_BASE_URL:-https://api.exchange.coinbase.com/}
+      EnergyCharts__BaseUrl: ${ENERGY_CHARTS_BASE_URL:-https://api.energy-charts.info/}
     restart: unless-stopped
     depends_on:
       insert:
@@ -182,6 +274,8 @@ services:
       postgres:
         condition: service_healthy
       rabbitmq:
+        condition: service_healthy
+      otel-collector:
         condition: service_healthy
 
   ui:
@@ -193,8 +287,9 @@ services:
     restart: unless-stopped
     depends_on:
       api:
-        condition: service_started
+        condition: service_healthy
 
 volumes:
   postgres-data:
   clickhouse-data:
+  banyandb-data:
