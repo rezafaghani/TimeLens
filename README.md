@@ -54,8 +54,7 @@ TimeLens is not a cryptocurrency trading bot and does not place trades.
 | `postgres` | Metadata, schedules, jobs, executions, validation history | `5432` |
 | `clickhouse` | Versioned OHLCV bars | `8123`, `9000` |
 | `rabbitmq` | RabbitMQ broker and management UI | `5672`, `15672` |
-| `skywalking-ui` | SkyWalking UI for local observability | `8081` |
-| `otel-collector` | Receives TimeLens OTLP telemetry and forwards it to SkyWalking OAP | `4317`, `4318` |
+| `lgtm` | Grafana with local Tempo traces, Loki logs, and Prometheus metrics | `3000`, `4317`, `4318` |
 
 ## Useful APIs
 
@@ -81,38 +80,23 @@ Then open:
 
 - UI: `http://localhost:8080`
 - RabbitMQ management: `http://localhost:15672`
-- SkyWalking UI: `http://localhost:8081`
-- SkyWalking OTLP traces: `http://localhost:8081/zipkin`
+- Grafana: `http://localhost:3000`
 
 Use `podman compose` instead of `docker compose` if that is your local runtime.
 
 ## Observability
 
-TimeLens services export OpenTelemetry traces and metrics to the local OpenTelemetry Collector. The Collector forwards them to SkyWalking OAP. Runtime logs stay on the normal console path by default; set `OTEL_EXPORT_LOGS=true` if you explicitly want to test OTLP log export.
+TimeLens services export OpenTelemetry traces, metrics, and logs to the local Grafana LGTM stack.
 
 ```text
 TimeLens Services
   -> OTLP
-  -> OpenTelemetry Collector
-  -> SkyWalking OAP
-  -> SkyWalking UI
+  -> Grafana LGTM (Tempo, Loki, Prometheus)
 ```
 
-SkyWalking 10.4 stores OTLP traces through its Zipkin-compatible trace path. If the APM service list is populated but trace search looks empty, open `http://localhost:8081/zipkin` and search for services such as `timelens-api`, `timelens-ingestion`, or `timelens-insert`.
+Open `http://localhost:3000`; the provisioned **TimeLens Overview** dashboard is the home page. Use its service filter to inspect request rate, errors, latency, memory, dependencies, logs, and traces. For ad-hoc queries, choose **Explore**, then Tempo for traces, Loki for logs, or Prometheus for metrics. The bundled stack is intended for local development and testing, not production.
 
-### SkyWalking Dashboard
-
-Local compose enables SkyWalking dashboard editing with `SKYWALKING_ENABLE_DASHBOARD_EDIT=true`.
-
-To create a TimeLens dashboard:
-
-1. Open `http://localhost:8081`.
-2. Go to `Dashboards`.
-3. Choose `New Dashboard`.
-4. Use layer `GENERAL` and service widgets for `timelens-api`, `timelens-ingestion`, `timelens-insert`, `timelens-scheduler`, and `timelens-validation-worker`.
-5. Use `http://localhost:8081/zipkin` for OTLP trace drill-down.
-
-Keep this enabled for local development only. For shared or production-like deployments, set `SKYWALKING_ENABLE_DASHBOARD_EDIT=false`.
+See [Observability](docs/observability.md) for dashboard usage, configuration, and troubleshooting.
 
 ## Local Development
 
