@@ -43,7 +43,7 @@ public static class ObservabilityExtensions
         builder.Logging.AddOpenTelemetry(options =>
         {
             options.SetResourceBuilder(resource);
-            options.IncludeScopes = true;
+            options.IncludeScopes = false;
             options.ParseStateValues = true;
             if (enabled && exportLogs)
             {
