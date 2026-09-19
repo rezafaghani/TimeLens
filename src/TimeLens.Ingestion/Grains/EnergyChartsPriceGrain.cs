@@ -12,7 +12,9 @@ namespace TimeLens.Ingestion.Grains;
 
 public class EnergyChartsPriceGrain(
     EnergyChartsPriceClient energyChartsClient,
-    EnergyChartsPriceNormalizer normalizer,
+    CoinMetricsClient coinMetricsClient,
+    EnergyChartsPriceNormalizer energyChartsNormalizer,
+    CoinMetricsNormalizer coinMetricsNormalizer,
     IngestionWriteClient insertClient,
     IServiceScopeFactory scopeFactory,
     IOptions<IngestionOptions> options,
@@ -38,8 +40,9 @@ public class EnergyChartsPriceGrain(
 
         try
         {
-            var biddingZone = Get(message.Parameters, "bzn", "DK1");
-            var timeframe = Get(message.Parameters, "timeframe", "1h");
+            var isCoinMetrics = message.Source == "coin-metrics-community";
+            var symbol = isCoinMetrics ? Get(message.Parameters, "asset", "btc") : Get(message.Parameters, "bzn", "DK1");
+            var timeframe = isCoinMetrics ? Get(message.Parameters, "frequency", "1d") : Get(message.Parameters, "timeframe", "1h");
             var start = Resolve(message.WindowStartExpression, -Math.Max(message.LookbackHours > 0 ? message.LookbackHours : options.Value.LookbackHours, 1));
             var end = Resolve(message.WindowEndExpression, 24);
             if (start >= end)
@@ -51,24 +54,24 @@ public class EnergyChartsPriceGrain(
             {
                 Endpoint = message.Endpoint,
                 Parameters = new Dictionary<string, string>(message.Parameters)
-                {
-                    ["bzn"] = biddingZone,
-                    ["timeframe"] = timeframe
-                }
             };
 
             using var providerActivity = TimeLensTelemetry.ActivitySource.StartActivity("ProviderRequest");
             var providerStarted = Stopwatch.GetTimestamp();
             providerActivity?.SetTag("market.provider", message.Source);
-            providerActivity?.SetTag("market.symbol", biddingZone);
+            providerActivity?.SetTag("market.symbol", symbol);
             providerActivity?.SetTag("market.timeframe", timeframe);
-            using var document = await energyChartsClient.GetAsync(biddingZone, start, end, cancellationToken);
+            using var document = isCoinMetrics
+                ? await coinMetricsClient.GetAsync(symbol, Get(message.Parameters, "metric"), timeframe, start, end, cancellationToken)
+                : await energyChartsClient.GetAsync(symbol, start, end, cancellationToken);
             TimeLensTelemetry.ProviderRequestDuration.Record(Stopwatch.GetElapsedTime(providerStarted).TotalSeconds, KeyValuePair.Create<string, object?>("market.provider", message.Source));
 
             NormalizedDataset dataset;
             using (TimeLensTelemetry.ActivitySource.StartActivity("NormalizeMarketData"))
             {
-                dataset = normalizer.Normalize(definition, document.RootElement);
+                dataset = isCoinMetrics
+                    ? coinMetricsNormalizer.Normalize(definition, document.RootElement)
+                    : energyChartsNormalizer.Normalize(definition, document.RootElement);
             }
             dataset.Metadata.SeriesId = message.SeriesId;
 

@@ -224,6 +224,7 @@ services:
       Ingestion__RetryBaseDelaySeconds: 10
       Coinbase__BaseUrl: ${COINBASE_BASE_URL:-https://api.exchange.coinbase.com/}
       EnergyCharts__BaseUrl: ${ENERGY_CHARTS_BASE_URL:-https://api.energy-charts.info/}
+      CoinMetrics__BaseUrl: ${COIN_METRICS_BASE_URL:-https://community-api.coinmetrics.io/v4/}
     restart: unless-stopped
     depends_on:
       insert:
