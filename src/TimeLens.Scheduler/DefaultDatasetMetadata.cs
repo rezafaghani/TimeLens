@@ -43,7 +43,7 @@ public static class DefaultDatasetMetadata
                     SeriesId = schedule.SeriesId,
                     Provider = schedule.Source,
                     Exchange = "Bitcoin network",
-                    Symbol = asset.ToUpperInvariant(),
+                    Symbol = $"{asset.ToUpperInvariant()}-{metric}",
                     AssetClass = "Crypto",
                     BaseAsset = asset.ToUpperInvariant(),
                     MarketDataType = "network-metric",

@@ -27,6 +27,7 @@ public class CoinMetricsNormalizerTests
 
         Assert.Equal("coinmetrics:btc:adractcnt:1d", dataset.Metadata.SeriesId);
         Assert.Equal("coin-metrics-community", dataset.Metadata.Provider);
+        Assert.Equal("BTC-AdrActCnt", dataset.Metadata.Symbol);
         Assert.Equal("network-metric", dataset.Metadata.MarketDataType);
         Assert.Equal("Addresses", dataset.Metadata.Unit);
         Assert.Equal(812345, dataset.Batch.Points.Single().Close);

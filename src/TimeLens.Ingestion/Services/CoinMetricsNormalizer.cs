@@ -16,7 +16,7 @@ public class CoinMetricsNormalizer
             SeriesId = $"coinmetrics:{asset}:{metric}:{frequency}".ToLowerInvariant(),
             Provider = "coin-metrics-community",
             Exchange = "Bitcoin network",
-            Symbol = asset.ToUpperInvariant(),
+            Symbol = $"{asset.ToUpperInvariant()}-{metric}",
             AssetClass = "Crypto",
             BaseAsset = asset.ToUpperInvariant(),
             MarketDataType = "network-metric",
