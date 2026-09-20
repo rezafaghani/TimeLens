@@ -30,10 +30,16 @@ builder.Services.AddHttpClient<EnergyChartsPriceClient>(client =>
     client.BaseAddress = new Uri(builder.Configuration["EnergyCharts:BaseUrl"] ?? "https://api.energy-charts.info/");
     client.DefaultRequestHeaders.UserAgent.ParseAdd("TimeLens/1.0");
 });
+builder.Services.AddHttpClient<CoinMetricsClient>(client =>
+{
+    client.BaseAddress = new Uri(builder.Configuration["CoinMetrics:BaseUrl"] ?? "https://community-api.coinmetrics.io/v4/");
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("TimeLens/1.0");
+});
 builder.Services.AddSingleton<ProviderRateLimiter>();
 builder.Services.AddHttpClient<OAuthTokenProvider>();
 builder.Services.AddSingleton<CoinbaseCandleNormalizer>();
 builder.Services.AddSingleton<EnergyChartsPriceNormalizer>();
+builder.Services.AddSingleton<CoinMetricsNormalizer>();
 builder.Services.AddScoped<IngestionWriteClient>();
 var grpcClientBuilder = builder.Services.AddGrpcClient<IngestionWrite.IngestionWriteClient>(options =>
 {

@@ -89,7 +89,7 @@ public class Worker(
                     var grain = grainFactory.GetGrain<ICoinbaseCandleGrain>(message.SeriesId);
                     await grain.IngestAsync(json, stoppingToken);
                 }
-                else if (message.Source == "energy-charts")
+                else if (message.Source is "energy-charts" or "coin-metrics-community")
                 {
                     var grain = grainFactory.GetGrain<IEnergyChartsPriceGrain>(message.SeriesId);
                     await grain.IngestAsync(json, stoppingToken);

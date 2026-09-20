@@ -34,6 +34,37 @@ public static class DefaultDatasetMetadata
                 continue;
             }
 
+            if (schedule.Source == "coin-metrics-community")
+            {
+                var asset = Parameter(schedule, "asset", "btc");
+                var metric = Parameter(schedule, "metric");
+                yield return new DatasetMetadataDto
+                {
+                    SeriesId = schedule.SeriesId,
+                    Provider = schedule.Source,
+                    Exchange = "Bitcoin network",
+                    Symbol = $"{asset.ToUpperInvariant()}-{metric}",
+                    AssetClass = "Crypto",
+                    BaseAsset = asset.ToUpperInvariant(),
+                    MarketDataType = "network-metric",
+                    Timeframe = Parameter(schedule, "frequency", "1d"),
+                    TimeZone = "UTC",
+                    Calendar = "crypto-24x7",
+                    ProviderInstrumentId = metric,
+                    Endpoint = schedule.Endpoint,
+                    Unit = metric switch
+                    {
+                        "AdrActCnt" => "Addresses",
+                        "TxCnt" => "Transactions",
+                        _ => "Varies"
+                    },
+                    LicenseInfo = "Coin Metrics Community",
+                    RequestParameters = new Dictionary<string, string>(schedule.Parameters),
+                    ProviderMetadata = new Dictionary<string, string> { ["metric"] = metric }
+                };
+                continue;
+            }
+
             var productId = Parameter(schedule, "product_id");
             var parts = productId.Split('-', 2, StringSplitOptions.RemoveEmptyEntries);
             var quoteAsset = parts.ElementAtOrDefault(1) ?? string.Empty;

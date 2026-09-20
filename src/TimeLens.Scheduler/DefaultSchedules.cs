@@ -52,11 +52,37 @@ public static class DefaultSchedules
                 },
                 CronExpression = "15 * * * *",
                 DefaultCronExpression = "15 * * * *",
-                LookbackHours = 48,
-                WindowStartExpression = "now-48h",
+                LookbackHours = 720,
+                WindowStartExpression = "now-720h",
                 WindowEndExpression = "now+24h",
-                DefaultWindowStartExpression = "now-48h",
+                DefaultWindowStartExpression = "now-720h",
                 DefaultWindowEndExpression = "now+24h",
+                BatchSize = 500
+            });
+        }
+
+        foreach (var metric in new[] { "HashRate", "AdrActCnt", "TxCnt" })
+        {
+            schedules.Add(new IngestionSchedule
+            {
+                Id = $"coinmetrics-btc-{metric.ToLowerInvariant()}-1d",
+                Name = $"BTC {metric} 1d",
+                SeriesId = $"coinmetrics:btc:{metric}:1d".ToLowerInvariant(),
+                Source = "coin-metrics-community",
+                Endpoint = "timeseries/asset-metrics",
+                Parameters = new Dictionary<string, string>
+                {
+                    ["asset"] = "btc",
+                    ["metric"] = metric,
+                    ["frequency"] = "1d"
+                },
+                CronExpression = "30 1 * * *",
+                DefaultCronExpression = "30 1 * * *",
+                LookbackHours = 720,
+                WindowStartExpression = "now-720h",
+                WindowEndExpression = "now",
+                DefaultWindowStartExpression = "now-720h",
+                DefaultWindowEndExpression = "now",
                 BatchSize = 500
             });
         }

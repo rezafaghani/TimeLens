@@ -2,12 +2,13 @@
 
 TimeLens is a provider-agnostic time-series and market-data intelligence platform.
 
-The first supported market-data domains are cryptocurrency OHLCV bars from Coinbase Exchange and European day-ahead electricity prices from Energy-Charts. The core architecture stays generic so equities, ETFs, indexes, forex, and other providers can be added later without redesigning ingestion, validation, storage, or visualization.
+The first supported market-data domains are cryptocurrency OHLCV bars from Coinbase Exchange, Bitcoin network signals from Coin Metrics Community, and European day-ahead electricity prices from Energy-Charts. The core architecture stays generic so equities, ETFs, indexes, forex, and other providers can be added later without redesigning ingestion, validation, storage, or visualization.
 
 ## What It Does
 
 - Browse market instruments such as `BTC-USD` and `ETH-USD`.
 - Browse energy-market series such as Danish `DK1` and `DK2` day-ahead electricity prices.
+- Compare Bitcoin price, hash rate, active addresses, and transaction count with energy-market series.
 - Inspect OHLCV bars in charts and tables.
 - Track ingestion schedules, queued jobs, executions, inserted rows, skipped rows, and failures.
 - Queue manual historical backloads.
@@ -65,9 +66,11 @@ GET /api/ingestion/series/{seriesId}/schedules
 GET /api/ingestion/series/{seriesId}/jobs
 GET /api/ingestion/series/{seriesId}/executions
 GET /api/data-quality/findings?datasetId={seriesId}
+GET /api/analytics/correlation?leftDatasetId={cryptoDatasetId}&rightDatasetId={energyDatasetId}&start=now-48h&end=now&bucket=1h&maxLag=24
 ```
 
 Date expressions support `now`, `today`, `today+N`, `today-N`, `now+Nh`, `now-Nh`, and ISO timestamps.
+Use `bucket=1d` when comparing the daily Bitcoin network signals with energy prices.
 
 ## Run With Compose
 
@@ -124,13 +127,14 @@ cd src/TimeLens.Client && npm test
 ## Planned Work
 
 - Analytics: returns, moving averages, volatility, RSI/MACD, volume indicators.
+- Cross-market correlation aligns stored series into time buckets, compares percentage changes, and reports lead/lag correlations. Positive lag means the left series moves before the right series.
 - Derived time series that can be stored, displayed, and validated.
 - Strategy/signals that consume APIs/application abstractions.
 - Backtesting with point-in-time data only, including positions, trades, PnL, drawdown, costs, and slippage.
 
 ## Notes
 
-- Current seeded crypto instruments are `BTC-USD` and `ETH-USD`.
+- Current seeded crypto instruments are `BTC-USD` and `ETH-USD`; daily Bitcoin network signals are `HashRate`, `AdrActCnt`, and `TxCnt` from Coin Metrics Community.
 - Current seeded energy series are Energy-Charts `DK1` and `DK2` day-ahead prices in `EUR / MWh`.
-- Current market-data types are OHLCV bars and electricity prices.
+- Current market-data types are OHLCV bars, Bitcoin network metrics, and electricity prices.
 - Provider credentials must come from environment variables or secret configuration. Do not commit API keys.
