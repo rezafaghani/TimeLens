@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.Net;
-using System.Text.Json;
 using Microsoft.Extensions.Options;
 
 namespace TimeLens.Ingestion.Services;
@@ -11,7 +10,7 @@ public class CoinbaseCandleClient(
     IOptions<IngestionOptions> options,
     ILogger<CoinbaseCandleClient> logger)
 {
-    public async Task<JsonDocument> GetAsync(string productId, int granularitySeconds, DateTimeOffset start, DateTimeOffset end, CancellationToken cancellationToken)
+    public async Task<ProviderResponse> GetAsync(string productId, int granularitySeconds, DateTimeOffset start, DateTimeOffset end, CancellationToken cancellationToken)
     {
         var uri = $"products/{Uri.EscapeDataString(productId)}/candles?granularity={granularitySeconds}&start={Iso(start)}&end={Iso(end)}";
         var maxRetries = Math.Max(options.Value.MaxProviderRetries, 0);
@@ -24,8 +23,8 @@ public class CoinbaseCandleClient(
             if (response.StatusCode != HttpStatusCode.TooManyRequests || attempt == maxRetries)
             {
                 response.EnsureSuccessStatusCode();
-                await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-                return await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+                var rawJson = await response.Content.ReadAsByteArrayAsync(cancellationToken);
+                return new ProviderResponse(rawJson);
             }
 
             var delay = GetRetryDelay(response, attempt);

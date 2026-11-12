@@ -15,6 +15,7 @@ public static class DefaultDatasetMetadata
                 yield return new DatasetMetadataDto
                 {
                     SeriesId = schedule.SeriesId,
+                    ProviderSeriesId = $"energy-charts:{biddingZone}:day-ahead-price".ToLowerInvariant(),
                     Provider = schedule.Source,
                     Exchange = "European day-ahead electricity market",
                     Symbol = biddingZone,
@@ -41,6 +42,7 @@ public static class DefaultDatasetMetadata
                 yield return new DatasetMetadataDto
                 {
                     SeriesId = schedule.SeriesId,
+                    ProviderSeriesId = $"coinmetrics:{asset}:{metric}:{Parameter(schedule, "frequency", "1d")}".ToLowerInvariant(),
                     Provider = schedule.Source,
                     Exchange = "Bitcoin network",
                     Symbol = $"{asset.ToUpperInvariant()}-{metric}",
@@ -71,6 +73,7 @@ public static class DefaultDatasetMetadata
             yield return new DatasetMetadataDto
             {
                 SeriesId = schedule.SeriesId,
+                ProviderSeriesId = $"coinbase:{productId}:{Parameter(schedule, "timeframe")}".ToLowerInvariant(),
                 Provider = schedule.Source,
                 Exchange = "Coinbase",
                 Symbol = productId,

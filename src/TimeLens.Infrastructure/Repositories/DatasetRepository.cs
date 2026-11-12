@@ -9,8 +9,15 @@ public class DatasetRepository(TimeLensContext context) : IDatasetRepository
 {
     public async Task<DatasetMetadataDto> UpsertAsync(DatasetMetadataDto metadata, CancellationToken cancellationToken = default)
     {
-        metadata.Id = string.IsNullOrWhiteSpace(metadata.Id) ? CreateDatasetId(metadata) : metadata.Id;
-        metadata.SeriesId = string.IsNullOrWhiteSpace(metadata.SeriesId) ? metadata.Id : metadata.SeriesId;
+        var definition = CanonicalSeriesRegistry.Resolve(metadata.Provider, metadata.ProviderSeriesId, metadata.Timeframe);
+        if (metadata.SeriesId != 0 && metadata.SeriesId != definition.SeriesId)
+        {
+            throw new InvalidOperationException(
+                $"Series definition '{metadata.ProviderSeriesId}' maps to ID {definition.SeriesId}, not {metadata.SeriesId}.");
+        }
+
+        metadata.SeriesId = definition.SeriesId;
+        metadata.DefinitionId = string.IsNullOrWhiteSpace(metadata.DefinitionId) ? CreateDefinitionId(metadata) : metadata.DefinitionId;
 
         var now = DateTimeOffset.UtcNow;
         if (metadata.FirstObservedAt == default)
@@ -21,18 +28,19 @@ public class DatasetRepository(TimeLensContext context) : IDatasetRepository
         metadata.LastIngestedAt = now;
 
         await using var command = context.Postgres.CreateCommand("""
-            INSERT INTO market_data_series (
-                id, series_id, provider, exchange, symbol, asset_class, base_asset, quote_asset,
+            INSERT INTO market_data.market_data_series (
+                definition_id, series_id, provider_series_id, provider, exchange, symbol, asset_class, base_asset, quote_asset,
                 market_data_type, timeframe, currency, time_zone, provider_instrument_id, endpoint,
                 unit, calendar, license_info, deprecated, request_parameters, provider_metadata,
                 user_metadata, first_available_at, last_available_at, first_observed_at, last_ingested_at)
             VALUES (
-                @id, @series_id, @provider, @exchange, @symbol, @asset_class, @base_asset, @quote_asset,
+                @definition_id, @series_id, @provider_series_id, @provider, @exchange, @symbol, @asset_class, @base_asset, @quote_asset,
                 @market_data_type, @timeframe, @currency, @time_zone, @provider_instrument_id, @endpoint,
                 @unit, @calendar, @license_info, @deprecated, @request_parameters, @provider_metadata,
                 @user_metadata, @first_available_at, @last_available_at, @first_observed_at, @last_ingested_at)
-            ON CONFLICT (id) DO UPDATE SET
-                series_id = EXCLUDED.series_id,
+            ON CONFLICT (series_id) DO UPDATE SET
+                definition_id = EXCLUDED.definition_id,
+                provider_series_id = EXCLUDED.provider_series_id,
                 provider = EXCLUDED.provider,
                 exchange = EXCLUDED.exchange,
                 symbol = EXCLUDED.symbol,
@@ -51,8 +59,8 @@ public class DatasetRepository(TimeLensContext context) : IDatasetRepository
                 deprecated = EXCLUDED.deprecated,
                 request_parameters = EXCLUDED.request_parameters,
                 provider_metadata = EXCLUDED.provider_metadata,
-                first_available_at = LEAST(market_data_series.first_available_at, EXCLUDED.first_available_at),
-                last_available_at = GREATEST(market_data_series.last_available_at, EXCLUDED.last_available_at),
+                first_available_at = LEAST(market_data.market_data_series.first_available_at, EXCLUDED.first_available_at),
+                last_available_at = GREATEST(market_data.market_data_series.last_available_at, EXCLUDED.last_available_at),
                 last_ingested_at = EXCLUDED.last_ingested_at
             """);
         AddParameters(command, metadata);
@@ -61,14 +69,14 @@ public class DatasetRepository(TimeLensContext context) : IDatasetRepository
         return metadata;
     }
 
-    public async Task<DatasetMetadataDto?> GetAsync(string id, CancellationToken cancellationToken = default)
+    public async Task<DatasetMetadataDto?> GetAsync(long seriesId, CancellationToken cancellationToken = default)
     {
         await using var command = context.Postgres.CreateCommand($"""
             {SelectSql}
-            WHERE id = @id
+            WHERE series_id = @series_id
             LIMIT 1
             """);
-        command.Parameters.AddWithValue("id", id);
+        command.Parameters.AddWithValue("series_id", seriesId);
 
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         return await reader.ReadAsync(cancellationToken) ? ToDto(reader) : null;
@@ -79,7 +87,11 @@ public class DatasetRepository(TimeLensContext context) : IDatasetRepository
         await using var command = context.Postgres.CreateCommand();
         var clauses = new List<string>();
 
-        AddFilter(command, clauses, "series_id", filter.SeriesId);
+        if (filter.SeriesId.HasValue)
+        {
+            clauses.Add("series_id = @series_id");
+            command.Parameters.AddWithValue("series_id", filter.SeriesId.Value);
+        }
         AddFilter(command, clauses, "provider", filter.Provider);
         AddFilter(command, clauses, "exchange", filter.Exchange);
         AddFilter(command, clauses, "symbol", filter.Symbol);
@@ -94,8 +106,9 @@ public class DatasetRepository(TimeLensContext context) : IDatasetRepository
         {
             clauses.Add("""
                 (
-                    id ILIKE @search OR
-                    series_id ILIKE @search OR
+                    series_id::text ILIKE @search OR
+                    definition_id ILIKE @search OR
+                    provider_series_id ILIKE @search OR
                     provider ILIKE @search OR
                     exchange ILIKE @search OR
                     symbol ILIKE @search OR
@@ -126,26 +139,26 @@ public class DatasetRepository(TimeLensContext context) : IDatasetRepository
         return result;
     }
 
-    public async Task<DatasetMetadataDto?> SetDeprecatedAsync(string id, bool deprecated, CancellationToken cancellationToken = default)
+    public async Task<DatasetMetadataDto?> SetDeprecatedAsync(long seriesId, bool deprecated, CancellationToken cancellationToken = default)
     {
         await using var command = context.Postgres.CreateCommand("""
-            UPDATE market_data_series
+            UPDATE market_data.market_data_series
             SET deprecated = @deprecated
-            WHERE id = @id
+            WHERE series_id = @series_id
             """);
-        command.Parameters.AddWithValue("id", id);
+        command.Parameters.AddWithValue("series_id", seriesId);
         command.Parameters.AddWithValue("deprecated", deprecated);
         await command.ExecuteNonQueryAsync(cancellationToken);
 
-        return await GetAsync(id, cancellationToken);
+        return await GetAsync(seriesId, cancellationToken);
     }
 
     private const string SelectSql = """
-        SELECT id, series_id, provider, exchange, symbol, asset_class, base_asset, quote_asset,
+        SELECT series_id, definition_id, provider_series_id, provider, exchange, symbol, asset_class, base_asset, quote_asset,
                market_data_type, timeframe, currency, time_zone, provider_instrument_id, endpoint,
                unit, calendar, license_info, deprecated, request_parameters::text, provider_metadata::text,
                user_metadata::text, first_available_at, last_available_at, first_observed_at, last_ingested_at
-        FROM market_data_series
+        FROM market_data.market_data_series
         """;
 
     private static void AddFilter(NpgsqlCommand command, List<string> clauses, string column, string? value)
@@ -159,7 +172,7 @@ public class DatasetRepository(TimeLensContext context) : IDatasetRepository
         command.Parameters.AddWithValue(column, value);
     }
 
-    private static string CreateDatasetId(DatasetMetadataDto metadata)
+    private static string CreateDefinitionId(DatasetMetadataDto metadata)
     {
         var parts = new[]
         {
@@ -176,8 +189,9 @@ public class DatasetRepository(TimeLensContext context) : IDatasetRepository
 
     private static void AddParameters(NpgsqlCommand command, DatasetMetadataDto dto)
     {
-        command.Parameters.AddWithValue("id", dto.Id);
+        command.Parameters.AddWithValue("definition_id", dto.DefinitionId);
         command.Parameters.AddWithValue("series_id", dto.SeriesId);
+        command.Parameters.AddWithValue("provider_series_id", dto.ProviderSeriesId);
         command.Parameters.AddWithValue("provider", dto.Provider);
         command.Parameters.AddWithValue("exchange", dto.Exchange);
         command.Parameters.AddWithValue("symbol", dto.Symbol);
@@ -205,30 +219,31 @@ public class DatasetRepository(TimeLensContext context) : IDatasetRepository
 
     private static DatasetMetadataDto ToDto(NpgsqlDataReader reader) => new()
     {
-        Id = reader.GetString(0),
-        SeriesId = reader.GetString(1),
-        Provider = reader.GetString(2),
-        Exchange = reader.GetString(3),
-        Symbol = reader.GetString(4),
-        AssetClass = reader.GetString(5),
-        BaseAsset = reader.GetString(6),
-        QuoteAsset = reader.GetString(7),
-        MarketDataType = reader.GetString(8),
-        Timeframe = reader.GetString(9),
-        Currency = reader.GetString(10),
-        TimeZone = reader.GetString(11),
-        ProviderInstrumentId = reader.GetString(12),
-        Endpoint = reader.GetString(13),
-        Unit = reader.GetString(14),
-        Calendar = reader.GetString(15),
-        LicenseInfo = reader.GetString(16),
-        Deprecated = reader.GetBoolean(17),
-        RequestParameters = JsonSerializer.Deserialize<Dictionary<string, string>>(reader.GetString(18)) ?? [],
-        ProviderMetadata = JsonSerializer.Deserialize<Dictionary<string, string>>(reader.GetString(19)) ?? [],
-        UserMetadata = JsonSerializer.Deserialize<Dictionary<string, string>>(reader.GetString(20)) ?? [],
-        FirstAvailableAt = reader.IsDBNull(21) ? null : reader.GetFieldValue<DateTimeOffset>(21),
-        LastAvailableAt = reader.IsDBNull(22) ? null : reader.GetFieldValue<DateTimeOffset>(22),
-        FirstObservedAt = reader.GetFieldValue<DateTimeOffset>(23),
-        LastIngestedAt = reader.GetFieldValue<DateTimeOffset>(24)
+        SeriesId = reader.GetInt64(0),
+        DefinitionId = reader.GetString(1),
+        ProviderSeriesId = reader.GetString(2),
+        Provider = reader.GetString(3),
+        Exchange = reader.GetString(4),
+        Symbol = reader.GetString(5),
+        AssetClass = reader.GetString(6),
+        BaseAsset = reader.GetString(7),
+        QuoteAsset = reader.GetString(8),
+        MarketDataType = reader.GetString(9),
+        Timeframe = reader.GetString(10),
+        Currency = reader.GetString(11),
+        TimeZone = reader.GetString(12),
+        ProviderInstrumentId = reader.GetString(13),
+        Endpoint = reader.GetString(14),
+        Unit = reader.GetString(15),
+        Calendar = reader.GetString(16),
+        LicenseInfo = reader.GetString(17),
+        Deprecated = reader.GetBoolean(18),
+        RequestParameters = JsonSerializer.Deserialize<Dictionary<string, string>>(reader.GetString(19)) ?? [],
+        ProviderMetadata = JsonSerializer.Deserialize<Dictionary<string, string>>(reader.GetString(20)) ?? [],
+        UserMetadata = JsonSerializer.Deserialize<Dictionary<string, string>>(reader.GetString(21)) ?? [],
+        FirstAvailableAt = reader.IsDBNull(22) ? null : reader.GetFieldValue<DateTimeOffset>(22),
+        LastAvailableAt = reader.IsDBNull(23) ? null : reader.GetFieldValue<DateTimeOffset>(23),
+        FirstObservedAt = reader.GetFieldValue<DateTimeOffset>(24),
+        LastIngestedAt = reader.GetFieldValue<DateTimeOffset>(25)
     };
 }

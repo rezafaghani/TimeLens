@@ -15,8 +15,8 @@ export interface MarketDataUpdatedEvent {
   eventId: string;
   version: number;
   occurredAt: string;
-  datasetId: string;
-  seriesId: string;
+  seriesId: number;
+  providerSeriesId: string;
   providerId: string;
   exchange: string;
   instrumentId: string;
@@ -30,12 +30,7 @@ export interface MarketDataUpdatedEvent {
 }
 
 export interface MarketDataSubscription {
-  datasetId: string;
-  seriesId: string;
-  providerId: string;
-  symbol: string;
-  marketDataType: string;
-  timeframe: string;
+  seriesId: number;
 }
 
 export function upsertBar(points: TimeSeriesPoint[], update: MarketDataUpdatedEvent) {

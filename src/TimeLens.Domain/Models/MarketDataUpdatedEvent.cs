@@ -5,8 +5,8 @@ public class MarketDataUpdatedEvent
     public string EventId { get; set; } = $"market-data-updated-{Guid.NewGuid():N}";
     public int Version { get; set; } = 1;
     public DateTimeOffset OccurredAt { get; set; } = DateTimeOffset.UtcNow;
-    public string DatasetId { get; set; } = string.Empty;
-    public string SeriesId { get; set; } = string.Empty;
+    public long SeriesId { get; set; }
+    public string ProviderSeriesId { get; set; } = string.Empty;
     public string ProviderId { get; set; } = string.Empty;
     public string Exchange { get; set; } = string.Empty;
     public string InstrumentId { get; set; } = string.Empty;

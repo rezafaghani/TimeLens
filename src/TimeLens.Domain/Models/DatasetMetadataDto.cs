@@ -2,8 +2,9 @@ namespace TimeLens.Domain.Models;
 
 public class DatasetMetadataDto
 {
-    public string Id { get; set; } = string.Empty;
-    public string SeriesId { get; set; } = string.Empty;
+    public long SeriesId { get; set; }
+    public string DefinitionId { get; set; } = string.Empty;
+    public string ProviderSeriesId { get; set; } = string.Empty;
     public string Provider { get; set; } = "coinbase-exchange";
     public string Exchange { get; set; } = string.Empty;
     public string Symbol { get; set; } = string.Empty;

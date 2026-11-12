@@ -1,8 +1,8 @@
 namespace TimeLens.Domain.Models;
 
 public record MarketCorrelationResult(
-    string LeftDatasetId,
-    string RightDatasetId,
+    long LeftSeriesId,
+    long RightSeriesId,
     string Bucket,
     int Samples,
     double? Correlation,
@@ -13,9 +13,9 @@ public record LagCorrelation(int Lag, string Offset, int Samples, double? Correl
 public static class MarketCorrelation
 {
     public static MarketCorrelationResult Calculate(
-        string leftDatasetId,
+        long leftSeriesId,
         IReadOnlyCollection<TimeSeriesPointDto> left,
-        string rightDatasetId,
+        long rightSeriesId,
         IReadOnlyCollection<TimeSeriesPointDto> right,
         TimeSpan bucket,
         int maxLag)
@@ -28,8 +28,8 @@ public static class MarketCorrelation
         var current = lags[maxLag];
 
         return new MarketCorrelationResult(
-            leftDatasetId,
-            rightDatasetId,
+            leftSeriesId,
+            rightSeriesId,
             Format(bucket),
             current.Samples,
             current.Correlation,

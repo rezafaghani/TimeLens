@@ -38,7 +38,7 @@ public class DataQualityControllerTests
             null,
             null,
             null,
-            [new UpsertQualityValidationJobTargetRequest("series", "coinbase:eth-usd:ohlcv:15m", null)],
+            [new UpsertQualityValidationJobTargetRequest("series", "12", null)],
             [new UpsertQualityValidationJobCheckRequest(null, "unknown.validator", null, true, null, null, null)]);
 
         var qualityRepository = new Mock<IQualityRepository>();
@@ -76,14 +76,14 @@ public class DataQualityControllerTests
     public async Task Status_ReturnsUnknownWhenNoSnapshotExists()
     {
         var qualityRepository = new Mock<IQualityRepository>();
-        qualityRepository.Setup(x => x.GetStatusAsync(null, "coinbase:btc-usd:1m", CancellationToken.None))
+        qualityRepository.Setup(x => x.GetStatusAsync(null, 5, CancellationToken.None))
             .ReturnsAsync((QualityStatusDto?)null);
 
-        var result = await Controller(qualityRepository.Object).Status(null, "coinbase:btc-usd:1m", CancellationToken.None);
+        var result = await Controller(qualityRepository.Object).Status(null, 5, CancellationToken.None);
 
         var status = Assert.IsType<QualityStatusDto>(Assert.IsType<OkObjectResult>(result).Value);
         Assert.Equal(QualityStatuses.Unknown, status.OverallStatus);
-        Assert.Equal("coinbase:btc-usd:1m", status.SeriesId);
+        Assert.Equal(5, status.SeriesId);
     }
 
     [Fact]
@@ -127,11 +127,11 @@ public class DataQualityControllerTests
         var qualityRepository = new Mock<IQualityRepository>();
         qualityRepository.Setup(x => x.GetJobsAsync(CancellationToken.None))
             .ReturnsAsync([
-                Job("job-1", "coinbase:eth-usd:ohlcv:15m"),
-                Job("job-2", "coinbase:btc-usd:ohlcv:15m")
+                Job("job-1", "12"),
+                Job("job-2", "7")
             ]);
 
-        var result = await Controller(qualityRepository.Object).Jobs("coinbase:eth-usd:ohlcv:15m", CancellationToken.None);
+        var result = await Controller(qualityRepository.Object).Jobs(12, CancellationToken.None);
 
         var jobs = Assert.IsType<List<QualityValidationJobDto>>(Assert.IsType<OkObjectResult>(result).Value);
         Assert.Single(jobs);
@@ -142,10 +142,10 @@ public class DataQualityControllerTests
     public async Task Executions_ReturnsSeriesHistory()
     {
         var qualityRepository = new Mock<IQualityRepository>();
-        qualityRepository.Setup(x => x.GetExecutionsAsync(null, "coinbase:eth-usd:ohlcv:15m", CancellationToken.None))
+        qualityRepository.Setup(x => x.GetExecutionsAsync(null, 12, CancellationToken.None))
             .ReturnsAsync([new QualityExecutionDto("execution-1", "job-1", "manual", QualityExecutionStatuses.Completed, DateTimeOffset.UtcNow, null, null, null, null, 1, 1, 0, 0, 0, "")]);
 
-        var result = await Controller(qualityRepository.Object).Executions(null, "coinbase:eth-usd:ohlcv:15m", CancellationToken.None);
+        var result = await Controller(qualityRepository.Object).Executions(null, 12, CancellationToken.None);
 
         var executions = Assert.IsType<List<QualityExecutionDto>>(Assert.IsType<OkObjectResult>(result).Value);
         Assert.Single(executions);

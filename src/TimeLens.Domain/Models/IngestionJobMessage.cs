@@ -5,7 +5,7 @@ public class IngestionJobMessage
     public string ScheduleId { get; set; } = string.Empty;
     public string JobId { get; set; } = string.Empty;
     public string ExecutionId { get; set; } = string.Empty;
-    public string SeriesId { get; set; } = string.Empty;
+    public long SeriesId { get; set; }
     public string Source { get; set; } = "coinbase-exchange";
     public string Endpoint { get; set; } = string.Empty;
     public Dictionary<string, string> Parameters { get; set; } = [];

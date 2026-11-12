@@ -18,7 +18,7 @@ public class EnergyChartsPriceNormalizer
 
         var metadata = new DatasetMetadataDto
         {
-            SeriesId = $"energy-charts:{biddingZone}:day-ahead-price".ToLowerInvariant(),
+            ProviderSeriesId = $"energy-charts:{biddingZone}:day-ahead-price".ToLowerInvariant(),
             Provider = "energy-charts",
             Exchange = "European day-ahead electricity market",
             Symbol = biddingZone,

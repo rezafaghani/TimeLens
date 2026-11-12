@@ -9,13 +9,13 @@ public class DefaultQualityValidationJobsTests
     public void Create_UsesSeriesTargetAndDoesNotAssumeEnergyPricesArePositive()
     {
         var schedule = DefaultSchedules.Create()
-            .Single(schedule => schedule.Source == "energy-charts" && schedule.SeriesId.EndsWith(":dk1:day-ahead-price"));
+            .Single(schedule => schedule.Source == "energy-charts" && schedule.SeriesId == 1);
 
         var job = DefaultQualityValidationJobs.Create(schedule);
 
         Assert.Equal(DefaultQualityValidationJobs.JobIdFor(schedule.SeriesId), job.Id);
         Assert.Equal("series", Assert.Single(job.Targets).TargetType);
-        Assert.Equal(schedule.SeriesId, job.Targets[0].TargetId);
+        Assert.Equal(schedule.SeriesId.ToString(), job.Targets[0].TargetId);
         Assert.Equal("0 2 * * *", job.CronExpression);
         Assert.Equal("today-30", job.WindowStartExpression);
         Assert.Equal("today", job.WindowEndExpression);
@@ -28,7 +28,7 @@ public class DefaultQualityValidationJobsTests
     public void Create_UsesTheScheduleLookbackForShorterSeries()
     {
         var schedule = DefaultSchedules.Create()
-            .Single(schedule => schedule.Source == "coinbase-exchange" && schedule.SeriesId.EndsWith(":btc-usd:1m"));
+            .Single(schedule => schedule.Source == "coinbase-exchange" && schedule.SeriesId == 5);
 
         var job = DefaultQualityValidationJobs.Create(schedule);
 

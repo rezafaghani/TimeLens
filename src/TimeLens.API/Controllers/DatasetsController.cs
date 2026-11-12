@@ -13,7 +13,7 @@ public class DatasetsController(
     [ProducesResponseType(typeof(List<DatasetMetadataDto>), StatusCodes.Status200OK)]
     public async Task<IActionResult> Search(
         [FromQuery] string? search,
-        [FromQuery] string? seriesId,
+        [FromQuery] long? seriesId,
         [FromQuery] string? provider,
         [FromQuery] string? exchange,
         [FromQuery] string? symbol,
@@ -46,7 +46,7 @@ public class DatasetsController(
     [HttpGet("{id}/metadata")]
     [ProducesResponseType(typeof(DatasetMetadataDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> Metadata([FromRoute] string id, CancellationToken cancellationToken)
+    public async Task<IActionResult> Metadata([FromRoute] long id, CancellationToken cancellationToken)
     {
         var dataset = await datasetRepository.GetAsync(id, cancellationToken);
         return dataset is null ? NotFound() : Ok(dataset);
@@ -55,7 +55,7 @@ public class DatasetsController(
     [HttpPatch("{id}/deprecated")]
     [ProducesResponseType(typeof(DatasetMetadataDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> SetDeprecated([FromRoute] string id, [FromBody] SetDatasetDeprecatedRequest request, CancellationToken cancellationToken)
+    public async Task<IActionResult> SetDeprecated([FromRoute] long id, [FromBody] SetDatasetDeprecatedRequest request, CancellationToken cancellationToken)
     {
         var dataset = await datasetRepository.SetDeprecatedAsync(id, request.Deprecated, cancellationToken);
         return dataset is null ? NotFound() : Ok(dataset);
@@ -65,7 +65,7 @@ public class DatasetsController(
     [ProducesResponseType(typeof(List<TimeSeriesPointDto>), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> Series(
-        [FromRoute] string id,
+        [FromRoute] long id,
         [FromQuery] string start,
         [FromQuery] string end,
         [FromQuery] string? asOf,
@@ -73,12 +73,12 @@ public class DatasetsController(
         [FromQuery] int? limit,
         CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(id)
+        if (id <= 0
             || !DateTimeExpression.TryResolve(start, out var startTime, timeZone)
             || !DateTimeExpression.TryResolve(end, out var endTime, timeZone)
             || startTime >= endTime)
         {
-            return BadRequest("A valid dataset id and date range are required.");
+            return BadRequest("A valid numeric series ID and date range are required.");
         }
 
         if (limit is < 1 or > 10000)

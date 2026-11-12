@@ -9,8 +9,9 @@ import { formatMarketTime, rangeForPreset, toLocalInput, type RangePreset } from
 import './styles.css';
 
 interface DatasetMetadata {
-  id: string;
-  seriesId: string;
+  seriesId: number;
+  definitionId: string;
+  providerSeriesId: string;
   provider: string;
   exchange: string;
   symbol: string;
@@ -124,7 +125,7 @@ function App() {
     connectionRef.current = connection;
 
     connection.on('MarketDataUpdated', (event: MarketDataUpdatedEvent) => {
-      if (event.datasetId !== selected.id) return;
+      if (event.seriesId !== selected.seriesId) return;
       if (syncing) {
         buffer.push(event);
         return;
@@ -159,7 +160,7 @@ function App() {
       void connection.invoke('Unsubscribe', subscription).catch(() => undefined);
       void connection.stop();
     };
-  }, [liveEnabled, selected?.id]);
+  }, [liveEnabled, selected?.seriesId]);
 
   const instruments = useMemo(() => groupSeriesByInstrument(series), [series]);
   const selectedInstrument = instruments.find(instrument => instrument.id === selectedInstrumentId);
@@ -185,7 +186,7 @@ function App() {
         ? selectedInstrumentId
         : nextInstruments[0]?.id ?? '';
       const nextSeries = result.filter(item => getInstrumentId(item) === nextInstrumentId);
-      const nextSelected = nextSeries.find(item => item.id === selected?.id) ?? nextSeries[0] ?? null;
+      const nextSelected = nextSeries.find(item => item.seriesId === selected?.seriesId) ?? nextSeries[0] ?? null;
       setSeries(result);
       setSelectedInstrumentId(nextInstrumentId);
       setSelected(nextSelected);
@@ -204,7 +205,7 @@ function App() {
     setError('');
     const params = new URLSearchParams({ start: start.trim(), end: end.trim(), timeZone });
     if (asOf) params.set('asOf', asOf.trim());
-    const response = await fetch(`${apiBase}/datasets/${encodeURIComponent(item.id)}/series?${params}`);
+    const response = await fetch(`${apiBase}/datasets/${item.seriesId}/series?${params}`);
     if (!response.ok) {
       setError('Unable to load OHLCV bars.');
       return [];
@@ -215,9 +216,9 @@ function App() {
     return result;
   }
 
-  async function loadIngestionStatus(seriesId: string) {
-    if (!seriesId) return;
-    const encoded = encodeURIComponent(seriesId);
+  async function loadIngestionStatus(seriesId: number) {
+    if (seriesId <= 0) return;
+    const encoded = String(seriesId);
     const [scheduleResponse, jobResponse, executionResponse] = await Promise.all([
       fetch(`${apiBase}/ingestion/series/${encoded}/schedules`),
       fetch(`${apiBase}/ingestion/series/${encoded}/jobs`),
@@ -230,7 +231,7 @@ function App() {
 
   async function loadQuality(item = selected) {
     if (!item) return;
-    const id = encodeURIComponent(item.seriesId || item.id);
+    const id = String(item.seriesId);
     const [findingsResponse, statusResponse, jobsResponse, executionsResponse] = await Promise.all([
       fetch(`${apiBase}/data-quality/findings?seriesId=${id}&activeOnly=true`),
       fetch(`${apiBase}/data-quality/status?seriesId=${id}`),
@@ -264,7 +265,7 @@ function App() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        datasetId: selected.id,
+        seriesId: selected.seriesId,
         windowStartExpression: start,
         windowEndExpression: end,
         batchSize: schedule.batchSize
@@ -298,7 +299,7 @@ function App() {
         timeZone: selected.timeZone || 'UTC',
         windowStartExpression: 'now-2h',
         windowEndExpression: 'now',
-        targets: [{ targetType: 'series', targetId: selected.seriesId || selected.id }],
+        targets: [{ targetType: 'series', targetId: String(selected.seriesId) }],
         checks: checks.map(([validatorId, configuration], sortOrder) => ({
           validatorId,
           enabled: true,
@@ -397,7 +398,7 @@ function App() {
       end: end.trim(),
       timeZone
     });
-    const response = await fetch(`${apiBase}/datasets/${encodeURIComponent(item.id)}/series?${params}`);
+    const response = await fetch(`${apiBase}/datasets/${item.seriesId}/series?${params}`);
     if (!response.ok) return;
     const missed = await response.json() as TimeSeriesPoint[];
     setPoints(current => missed.reduce((next, bar) => upsertBar(next, pointToEvent(item, bar)), current));
@@ -504,14 +505,7 @@ function App() {
 }
 
 function toSubscription(item: DatasetMetadata): MarketDataSubscription {
-  return {
-    datasetId: item.id,
-    seriesId: item.seriesId,
-    providerId: item.provider,
-    symbol: item.symbol,
-    marketDataType: item.marketDataType,
-    timeframe: item.timeframe
-  };
+  return { seriesId: item.seriesId };
 }
 
 function rangeLabel(preset: RangePreset) {
@@ -529,11 +523,11 @@ function isoDurationForTimeframe(timeframe: string) {
 
 function pointToEvent(item: DatasetMetadata, point: TimeSeriesPoint): MarketDataUpdatedEvent {
   return {
-    eventId: `catch-up-${item.id}-${point.timestamp}`,
+    eventId: `catch-up-${item.seriesId}-${point.timestamp}`,
     version: 1,
     occurredAt: point.asOf,
-    datasetId: item.id,
     seriesId: item.seriesId,
+    providerSeriesId: item.providerSeriesId,
     providerId: item.provider,
     exchange: item.exchange,
     instrumentId: item.providerInstrumentId,
@@ -585,7 +579,7 @@ function MetadataPanel({ item, instrument, timeZone, onSelectSeries }: { item: D
       <dl>{rows.map(([label, value]) => <React.Fragment key={label}><dt>{label}</dt><dd>{value}</dd></React.Fragment>)}</dl>
       <div className="preset-row">
         {(instrument?.series as DatasetMetadata[] | undefined ?? []).map(series => (
-          <button key={series.id} className={series.id === item.id ? '' : 'secondary'} onClick={() => onSelectSeries(series)}>
+          <button key={series.seriesId} className={series.seriesId === item.seriesId ? '' : 'secondary'} onClick={() => onSelectSeries(series)}>
             {series.timeframe}
           </button>
         ))}

@@ -14,7 +14,7 @@ public class IngestionControlController(
 {
     [HttpGet("schedules")]
     [ProducesResponseType(typeof(List<IngestionSchedule>), StatusCodes.Status200OK)]
-    public async Task<IActionResult> Schedules([FromQuery] string? seriesId, CancellationToken cancellationToken)
+    public async Task<IActionResult> Schedules([FromQuery] long? seriesId, CancellationToken cancellationToken)
     {
         return Ok(await repository.GetSchedulesAsync(seriesId, cancellationToken));
     }
@@ -23,7 +23,7 @@ public class IngestionControlController(
     [ProducesResponseType(typeof(List<IngestionJob>), StatusCodes.Status200OK)]
     public async Task<IActionResult> Jobs(
         [FromQuery] string? scheduleId,
-        [FromQuery] string? seriesId,
+        [FromQuery] long? seriesId,
         CancellationToken cancellationToken)
     {
         return Ok(await repository.GetJobsAsync(scheduleId, seriesId, cancellationToken));
@@ -34,7 +34,7 @@ public class IngestionControlController(
     public async Task<IActionResult> Executions(
         [FromQuery] string? jobId,
         [FromQuery] string? scheduleId,
-        [FromQuery] string? seriesId,
+        [FromQuery] long? seriesId,
         CancellationToken cancellationToken)
     {
         return Ok(await repository.GetExecutionsAsync(jobId, scheduleId, seriesId, cancellationToken));
@@ -42,21 +42,21 @@ public class IngestionControlController(
 
     [HttpGet("series/{seriesId}/schedules")]
     [ProducesResponseType(typeof(List<IngestionSchedule>), StatusCodes.Status200OK)]
-    public async Task<IActionResult> SeriesSchedules([FromRoute] string seriesId, CancellationToken cancellationToken)
+    public async Task<IActionResult> SeriesSchedules([FromRoute] long seriesId, CancellationToken cancellationToken)
     {
         return Ok(await repository.GetSchedulesAsync(seriesId, cancellationToken));
     }
 
     [HttpGet("series/{seriesId}/jobs")]
     [ProducesResponseType(typeof(List<IngestionJob>), StatusCodes.Status200OK)]
-    public async Task<IActionResult> SeriesJobs([FromRoute] string seriesId, CancellationToken cancellationToken)
+    public async Task<IActionResult> SeriesJobs([FromRoute] long seriesId, CancellationToken cancellationToken)
     {
         return Ok(await repository.GetJobsAsync(null, seriesId, cancellationToken));
     }
 
     [HttpGet("series/{seriesId}/executions")]
     [ProducesResponseType(typeof(List<IngestionExecution>), StatusCodes.Status200OK)]
-    public async Task<IActionResult> SeriesExecutions([FromRoute] string seriesId, CancellationToken cancellationToken)
+    public async Task<IActionResult> SeriesExecutions([FromRoute] long seriesId, CancellationToken cancellationToken)
     {
         return Ok(await repository.GetExecutionsAsync(null, null, seriesId, cancellationToken));
     }
@@ -77,21 +77,38 @@ public class IngestionControlController(
             return BadRequest(validation);
         }
 
-        if (string.IsNullOrWhiteSpace(request.SeriesId) || string.IsNullOrWhiteSpace(request.Source) || string.IsNullOrWhiteSpace(request.Endpoint))
+        if (request.SeriesId <= 0 || string.IsNullOrWhiteSpace(request.Source) || string.IsNullOrWhiteSpace(request.Endpoint))
         {
             return BadRequest("Series, source, and provider route are required.");
         }
 
+        var parameters = request.Parameters ?? [];
+        CanonicalSeriesDefinition definition;
+        try
+        {
+            definition = CanonicalSeriesRegistry.ResolveSchedule(request.Source, parameters);
+        }
+        catch (InvalidOperationException exception)
+        {
+            return BadRequest(exception.Message);
+        }
+
+        if (definition.SeriesId != request.SeriesId)
+        {
+            return BadRequest(
+                $"Provider parameters resolve to canonical series ID {definition.SeriesId}, not {request.SeriesId}.");
+        }
+
         var schedule = await repository.CreateScheduleAsync(new IngestionSchedule
         {
-            Name = string.IsNullOrWhiteSpace(request.Name) ? request.SeriesId.Trim() : request.Name.Trim(),
-            SeriesId = request.SeriesId.Trim(),
+            Name = string.IsNullOrWhiteSpace(request.Name) ? request.SeriesId.ToString(System.Globalization.CultureInfo.InvariantCulture) : request.Name.Trim(),
+            SeriesId = request.SeriesId,
             CronExpression = request.CronExpression.Trim(),
             DefaultCronExpression = request.CronExpression.Trim(),
             Enabled = request.Enabled,
             Source = request.Source.Trim(),
             Endpoint = request.Endpoint.Trim(),
-            Parameters = request.Parameters ?? [],
+            Parameters = parameters,
             LookbackHours = request.LookbackHours < 1 ? 48 : request.LookbackHours,
             WindowStartExpression = request.WindowStartExpression.Trim(),
             WindowEndExpression = request.WindowEndExpression.Trim(),
@@ -145,7 +162,7 @@ public class IngestionControlController(
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> CreateBackload([FromRoute] string id, [FromBody] CreateBackloadRequest request, CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(request.DatasetId))
+        if (request.SeriesId <= 0)
         {
             return BadRequest("Dataset is required.");
         }
@@ -171,7 +188,7 @@ public class IngestionControlController(
             return NotFound();
         }
 
-        var metadata = await datasets.GetAsync(request.DatasetId, cancellationToken);
+        var metadata = await datasets.GetAsync(request.SeriesId, cancellationToken);
         if (metadata is null || metadata.SeriesId != schedule.SeriesId)
         {
             return BadRequest("Dataset does not belong to this schedule series.");
@@ -240,7 +257,7 @@ public record UpdateIngestionScheduleRequest(
 
 public record CreateIngestionScheduleRequest(
     string Name,
-    string SeriesId,
+    long SeriesId,
     string Source,
     string Endpoint,
     Dictionary<string, string> Parameters,
@@ -252,7 +269,7 @@ public record CreateIngestionScheduleRequest(
     int BatchSize);
 
 public record CreateBackloadRequest(
-    string DatasetId,
+    long SeriesId,
     string WindowStartExpression,
     string WindowEndExpression,
     int BatchSize);

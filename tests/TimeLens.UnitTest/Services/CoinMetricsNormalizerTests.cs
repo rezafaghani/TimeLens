@@ -25,7 +25,7 @@ public class CoinMetricsNormalizerTests
             }
         }, document.RootElement);
 
-        Assert.Equal("coinmetrics:btc:adractcnt:1d", dataset.Metadata.SeriesId);
+        Assert.Equal("coinmetrics:btc:adractcnt:1d", dataset.Metadata.ProviderSeriesId);
         Assert.Equal("coin-metrics-community", dataset.Metadata.Provider);
         Assert.Equal("BTC-AdrActCnt", dataset.Metadata.Symbol);
         Assert.Equal("network-metric", dataset.Metadata.MarketDataType);

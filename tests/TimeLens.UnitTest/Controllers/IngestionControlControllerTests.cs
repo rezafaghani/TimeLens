@@ -15,7 +15,7 @@ public class IngestionControlControllerTests
     {
         var repository = new Mock<IIngestionControlRepository>();
         var cancellationToken = CancellationToken.None;
-        var seriesId = "coinbase:btc-usd:1m";
+        const long seriesId = 5;
 
         repository.Setup(x => x.GetSchedulesAsync(seriesId, cancellationToken))
             .ReturnsAsync([new IngestionSchedule { SeriesId = seriesId }]);
@@ -88,7 +88,7 @@ public class IngestionControlControllerTests
         var result = await CreateController(repository).CreateSchedule(
             new CreateIngestionScheduleRequest(
                 "BTC-USD 1m",
-                "coinbase:btc-usd:1m",
+                5,
                 "coinbase-exchange",
                 "products/candles",
                 new Dictionary<string, string> { ["product_id"] = "BTC-USD", ["timeframe"] = "1m" },
@@ -103,7 +103,7 @@ public class IngestionControlControllerTests
         Assert.IsType<CreatedAtActionResult>(result);
         repository.Verify(x => x.CreateScheduleAsync(
             It.Is<IngestionSchedule>(schedule =>
-                schedule.SeriesId == "coinbase:btc-usd:1m"
+                schedule.SeriesId == 5
                 && schedule.Source == "coinbase-exchange"
                 && schedule.Endpoint == "products/candles"
                 && schedule.Enabled),

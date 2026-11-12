@@ -8,9 +8,18 @@ namespace TimeLens.Scheduler;
 
 public static class DefaultQualityValidationJobs
 {
-    public static string JobIdFor(string seriesId)
+    public static string JobIdFor(long seriesId)
     {
-        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(seriesId.ToLowerInvariant())));
+        var definition = CanonicalSeriesRegistry.Get(seriesId);
+        var providerSeriesId = definition.ProviderSeriesId;
+        if (CanonicalSeriesRegistry.All.Count(candidate =>
+                candidate.ProviderSeriesId == definition.ProviderSeriesId) > 1)
+        {
+            providerSeriesId = $"{providerSeriesId}:{definition.Timeframe}";
+        }
+
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
+            providerSeriesId.ToLowerInvariant())));
         return $"quality-auto-{hash[..16].ToLowerInvariant()}";
     }
 
@@ -31,7 +40,7 @@ public static class DefaultQualityValidationJobs
             4,
             300,
             null,
-            [new UpsertQualityValidationJobTargetRequest("series", schedule.SeriesId, null)],
+            [new UpsertQualityValidationJobTargetRequest("series", schedule.SeriesId.ToString(System.Globalization.CultureInfo.InvariantCulture), null)],
             [
                 Check("metadata.required", configuration),
                 Check("availability.empty-data", configuration),

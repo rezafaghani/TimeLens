@@ -1,4 +1,5 @@
 using TimeLens.Domain.Entities;
+using TimeLens.Domain.Models;
 
 namespace TimeLens.Scheduler;
 
@@ -13,12 +14,12 @@ public static class DefaultSchedules
         {
             foreach (var timeframe in new[] { "1m", "5m", "15m", "1h", "1d" })
             {
-                var seriesId = $"coinbase:{productId}:{timeframe}".ToLowerInvariant();
+                var providerSeriesId = $"coinbase:{productId}:{timeframe}".ToLowerInvariant();
                 schedules.Add(new IngestionSchedule
                 {
                     Id = $"coinbase-{productId.ToLowerInvariant()}-{timeframe}",
                     Name = $"{productId} {timeframe}",
-                    SeriesId = seriesId,
+                    SeriesId = CanonicalSeriesRegistry.Resolve("coinbase-exchange", providerSeriesId, timeframe).SeriesId,
                     Source = "coinbase-exchange",
                     Endpoint = "products/candles",
                     Parameters = new Dictionary<string, string>
@@ -44,7 +45,10 @@ public static class DefaultSchedules
             {
                 Id = $"energy-charts-{biddingZone.ToLowerInvariant()}-day-ahead-price",
                 Name = $"{biddingZone} day-ahead electricity price",
-                SeriesId = $"energy-charts:{biddingZone}:day-ahead-price".ToLowerInvariant(),
+                SeriesId = CanonicalSeriesRegistry.Resolve(
+                    "energy-charts",
+                    $"energy-charts:{biddingZone}:day-ahead-price",
+                    "1h").SeriesId,
                 Source = "energy-charts",
                 Endpoint = "price",
                 Parameters = new Dictionary<string, string>
@@ -69,7 +73,10 @@ public static class DefaultSchedules
             {
                 Id = $"coinmetrics-btc-{metric.ToLowerInvariant()}-1d",
                 Name = $"BTC {metric} 1d",
-                SeriesId = $"coinmetrics:btc:{metric}:1d".ToLowerInvariant(),
+                SeriesId = CanonicalSeriesRegistry.Resolve(
+                    "coin-metrics-community",
+                    $"coinmetrics:btc:{metric}:1d",
+                    "1d").SeriesId,
                 Source = "coin-metrics-community",
                 Endpoint = "timeseries/asset-metrics",
                 Parameters = new Dictionary<string, string>

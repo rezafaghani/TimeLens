@@ -61,6 +61,21 @@ services:
       timeout: 5s
       retries: 12
 
+  seaweedfs:
+    image: chrislusf/seaweedfs:4.53
+    command: ["mini", "-dir=/data"]
+    restart: unless-stopped
+    environment:
+      AWS_ACCESS_KEY_ID: ${SEAWEEDFS_ACCESS_KEY:-timelens}
+      AWS_SECRET_ACCESS_KEY: ${SEAWEEDFS_SECRET_KEY:-${RABBITMQ_PASSWORD:?RABBITMQ_PASSWORD is required}}
+      S3_BUCKET: timelens-ingestion
+    ports:
+      - "8333:8333"
+      - "8888:8888"
+      - "9333:9333"
+    volumes:
+      - seaweedfs-data:/data
+
   lgtm:
     image: grafana/otel-lgtm:${GRAFANA_OTEL_LGTM_VERSION:-0.30.1}
     restart: unless-stopped
@@ -129,10 +144,15 @@ services:
       RabbitMq__UserName: ${RABBITMQ_USER:-guest}
       RabbitMq__Password: ${RABBITMQ_PASSWORD:?RABBITMQ_PASSWORD is required}
       RabbitMq__ExchangeName: timelens.jobs
+      RabbitMq__IngestionArtifactsQueueName: timelens.ingestion.artifacts
       RabbitMq__MarketDataUpdatesQueueName: timelens.market-data.updates
-    ports:
-      - "5101:8080"
-      - "5103:8081"
+      ObjectStorage__ServiceUrl: http://seaweedfs:8333
+      ObjectStorage__BucketName: timelens-ingestion
+      ObjectStorage__AccessKey: ${SEAWEEDFS_ACCESS_KEY:-timelens}
+      ObjectStorage__SecretKey: ${SEAWEEDFS_SECRET_KEY:-${RABBITMQ_PASSWORD:?RABBITMQ_PASSWORD is required}}
+      ObjectStorage__Region: us-east-1
+      ArtifactWorker__MaxRetries: 5
+      ArtifactWorker__RetryDelaySeconds: 5
     restart: unless-stopped
     depends_on:
       postgres:
@@ -141,6 +161,8 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      seaweedfs:
+        condition: service_started
       lgtm:
         condition: service_healthy
 
@@ -205,11 +227,11 @@ services:
     environment:
       <<: *timelens-observability-env
       ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=${POSTGRES_DB:-timelens};Username=${POSTGRES_USER:-timelens};Password=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}"
-      InsertApi__GrpcUrl: http://insert:8081
-      InsertApi__TokenEndpoint: ${INSERT_API_TOKEN_ENDPOINT:-}
-      InsertApi__ClientId: ${INSERT_API_CLIENT_ID:-}
-      InsertApi__ClientSecret: ${INSERT_API_CLIENT_SECRET:-}
-      InsertApi__Scope: ${INSERT_API_SCOPE:-timelens.insert.write}
+      ObjectStorage__ServiceUrl: http://seaweedfs:8333
+      ObjectStorage__BucketName: timelens-ingestion
+      ObjectStorage__AccessKey: ${SEAWEEDFS_ACCESS_KEY:-timelens}
+      ObjectStorage__SecretKey: ${SEAWEEDFS_SECRET_KEY:-${RABBITMQ_PASSWORD:?RABBITMQ_PASSWORD is required}}
+      ObjectStorage__Region: us-east-1
       RabbitMq__HostName: rabbitmq
       RabbitMq__Port: 5672
       RabbitMq__VirtualHost: ${RABBITMQ_VHOST:-timelens}
@@ -217,6 +239,7 @@ services:
       RabbitMq__Password: ${RABBITMQ_PASSWORD:?RABBITMQ_PASSWORD is required}
       RabbitMq__ExchangeName: timelens.jobs
       RabbitMq__QueueName: timelens.ingestion.jobs
+      RabbitMq__IngestionArtifactsQueueName: timelens.ingestion.artifacts
       Ingestion__LookbackHours: 48
       Ingestion__BatchSize: 500
       Ingestion__MinRequestIntervalSeconds: 3
@@ -227,12 +250,12 @@ services:
       CoinMetrics__BaseUrl: ${COIN_METRICS_BASE_URL:-https://community-api.coinmetrics.io/v4/}
     restart: unless-stopped
     depends_on:
-      insert:
-        condition: service_started
       postgres:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      seaweedfs:
+        condition: service_started
       lgtm:
         condition: service_healthy
 
@@ -250,4 +273,5 @@ services:
 volumes:
   postgres-data:
   clickhouse-data:
+  seaweedfs-data:
   lgtm-data:

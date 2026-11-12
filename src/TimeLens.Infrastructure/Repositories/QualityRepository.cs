@@ -13,7 +13,7 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
     {
         await using var command = context.Postgres.CreateCommand("""
             SELECT id, category, display_name, description, target_type, configuration_version, default_severity, configuration_schema::text
-            FROM quality_validation_plugins
+            FROM quality.quality_validation_plugins
             WHERE (usage & @usage) = @usage
             ORDER BY category, id
             """);
@@ -43,7 +43,7 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
         foreach (var validator in validators)
         {
             await using var command = context.Postgres.CreateCommand("""
-                INSERT INTO quality_validation_plugins (
+                INSERT INTO quality.quality_validation_plugins (
                     id, category, display_name, description, target_type, configuration_version,
                     default_severity, configuration_schema, usage, registered_at, updated_at)
                 VALUES (
@@ -79,7 +79,7 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
     {
         await using var command = context.Postgres.CreateCommand("""
             SELECT id, name, description, group_type, enabled, rule::text, tags::text, created_at, updated_at
-            FROM quality_series_groups
+            FROM quality.quality_series_groups
             ORDER BY name
             """);
 
@@ -98,7 +98,7 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
         var id = string.IsNullOrWhiteSpace(request.Id) ? $"group-{Guid.NewGuid():N}" : request.Id;
         var now = DateTimeOffset.UtcNow;
         await using var command = context.Postgres.CreateCommand("""
-            INSERT INTO quality_series_groups (id, name, description, group_type, enabled, rule, tags, created_at, updated_at)
+            INSERT INTO quality.quality_series_groups (id, name, description, group_type, enabled, rule, tags, created_at, updated_at)
             VALUES (@id, @name, @description, @group_type, @enabled, @rule, @tags, @created_at, @updated_at)
             ON CONFLICT (id) DO UPDATE SET
                 name = EXCLUDED.name,
@@ -128,7 +128,7 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
     public async Task<QualitySeriesGroupDto?> SetSeriesGroupEnabledAsync(string id, bool enabled, CancellationToken cancellationToken = default)
     {
         await using var command = context.Postgres.CreateCommand("""
-            UPDATE quality_series_groups
+            UPDATE quality.quality_series_groups
             SET enabled = @enabled, updated_at = @updated_at
             WHERE id = @id
             RETURNING id, name, description, group_type, enabled, rule::text, tags::text, created_at, updated_at
@@ -145,7 +145,7 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
     {
         await using var command = context.Postgres.CreateCommand("""
             SELECT group_id, dataset_id, series_id, created_at
-            FROM quality_series_group_members
+            FROM quality.quality_series_group_members
             WHERE group_id = @group_id
             ORDER BY series_id, dataset_id
             """);
@@ -170,7 +170,7 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
         await using (var delete = connection.CreateCommand())
         {
             delete.Transaction = transaction;
-            delete.CommandText = "DELETE FROM quality_series_group_members WHERE group_id = @group_id";
+            delete.CommandText = "DELETE FROM quality.quality_series_group_members WHERE group_id = @group_id";
             delete.Parameters.AddWithValue("group_id", groupId);
             await delete.ExecuteNonQueryAsync(cancellationToken);
         }
@@ -180,7 +180,7 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
             await using var insert = connection.CreateCommand();
             insert.Transaction = transaction;
             insert.CommandText = """
-                INSERT INTO quality_series_group_members (group_id, dataset_id, series_id, created_at)
+                INSERT INTO quality.quality_series_group_members (group_id, dataset_id, series_id, created_at)
                 VALUES (@group_id, @dataset_id, @series_id, @created_at)
                 """;
             insert.Parameters.AddWithValue("group_id", groupId);
@@ -217,28 +217,28 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
         return (await ReadJobs(reader, cancellationToken)).SingleOrDefault();
     }
 
-    public async Task<List<QualityExecutionDto>> GetExecutionsAsync(string? jobId, string? seriesId, CancellationToken cancellationToken = default)
+    public async Task<List<QualityExecutionDto>> GetExecutionsAsync(string? jobId, long? seriesId, CancellationToken cancellationToken = default)
     {
         await using var command = context.Postgres.CreateCommand();
         var clauses = new List<string>();
         AddFilter(command, clauses, "e.job_id", "job_id", jobId);
-        if (!string.IsNullOrWhiteSpace(seriesId))
+        if (seriesId.HasValue)
         {
             clauses.Add("""
                 EXISTS (
                     SELECT 1
-                    FROM quality_validation_target_executions t
+                    FROM quality.quality_validation_target_executions t
                     WHERE t.execution_id = e.id AND t.series_id = @series_id
                 )
                 """);
-            command.Parameters.AddWithValue("series_id", seriesId);
+            command.Parameters.AddWithValue("series_id", seriesId.Value);
         }
 
         command.CommandText = $"""
             SELECT e.id, e.job_id, e.trigger_type, e.status, e.queued_at, e.started_at, e.finished_at,
                    e.evaluated_start, e.evaluated_end, e.target_count, e.completed_count, e.warning_count,
                    e.critical_count, e.technical_failure_count, e.error
-            FROM quality_validation_executions e
+            FROM quality.quality_validation_executions e
             {(clauses.Count == 0 ? "" : $"WHERE {string.Join(" AND ", clauses)}")}
             ORDER BY e.queued_at DESC
             LIMIT 200
@@ -280,7 +280,7 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
         {
             command.Transaction = transaction;
             command.CommandText = """
-                INSERT INTO quality_validation_jobs (
+                INSERT INTO quality.quality_validation_jobs (
                     id, name, description, enabled, cron_expression, time_zone, window_start_expression,
                     window_end_expression, max_parallelism, timeout_seconds, tags, created_at, updated_at)
                 VALUES (
@@ -325,7 +325,7 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
     public async Task<QualityValidationJobDto?> SetJobEnabledAsync(string id, bool enabled, CancellationToken cancellationToken = default)
     {
         await using var command = context.Postgres.CreateCommand("""
-            UPDATE quality_validation_jobs
+            UPDATE quality.quality_validation_jobs
             SET enabled = @enabled, updated_at = @updated_at
             WHERE id = @id
             """);
@@ -339,7 +339,7 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
     public async Task MarkJobQueuedAsync(string id, DateTimeOffset queuedAt, CancellationToken cancellationToken = default)
     {
         await using var command = context.Postgres.CreateCommand("""
-            UPDATE quality_validation_jobs
+            UPDATE quality.quality_validation_jobs
             SET last_queued_at = @last_queued_at, updated_at = @updated_at
             WHERE id = @id
             """);
@@ -349,12 +349,12 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
-    public async Task<List<QualityFindingDto>> GetFindingsAsync(string? datasetId, string? seriesId, bool activeOnly, CancellationToken cancellationToken = default)
+    public async Task<List<QualityFindingDto>> GetFindingsAsync(string? datasetId, long? seriesId, bool activeOnly, CancellationToken cancellationToken = default)
     {
         await using var command = context.Postgres.CreateCommand();
         var clauses = new List<string>();
         AddFilter(command, clauses, "dataset_id", datasetId);
-        AddFilter(command, clauses, "series_id", seriesId);
+        AddSeriesFilter(command, clauses, seriesId);
         if (activeOnly)
         {
             clauses.Add("active = true");
@@ -365,7 +365,7 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
                    validator_id, category, severity, quality_status, trading_impact, title, message,
                    affected_start, affected_end, expected_count, actual_count, affected_count,
                    sample_timestamps::text, details::text, fingerprint, active, created_at, updated_at
-            FROM quality_findings
+            FROM quality.quality_findings
             {(clauses.Count == 0 ? "" : $"WHERE {string.Join(" AND ", clauses)}")}
             ORDER BY active DESC, severity DESC, updated_at DESC
             LIMIT 500
@@ -381,16 +381,16 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
         return result;
     }
 
-    public async Task<QualityStatusDto?> GetStatusAsync(string? datasetId, string? seriesId, CancellationToken cancellationToken = default)
+    public async Task<QualityStatusDto?> GetStatusAsync(string? datasetId, long? seriesId, CancellationToken cancellationToken = default)
     {
         await using var command = context.Postgres.CreateCommand();
         var clauses = new List<string>();
         AddFilter(command, clauses, "dataset_id", datasetId);
-        AddFilter(command, clauses, "series_id", seriesId);
+        AddSeriesFilter(command, clauses, seriesId);
 
         command.CommandText = $"""
             SELECT dataset_id, series_id, overall_status, category_statuses::text, latest_execution_id, as_of
-            FROM quality_status_snapshots
+            FROM quality.quality_status_snapshots
             {(clauses.Count == 0 ? "" : $"WHERE {string.Join(" AND ", clauses)}")}
             ORDER BY as_of DESC
             LIMIT 1
@@ -398,7 +398,7 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
 
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         return await reader.ReadAsync(cancellationToken)
-            ? new QualityStatusDto(reader.GetString(0), reader.GetString(1), reader.GetString(2), Json(reader.GetString(3)), reader.GetString(4), reader.GetFieldValue<DateTimeOffset>(5))
+            ? new QualityStatusDto(reader.GetString(0), reader.GetInt64(1), reader.GetString(2), Json(reader.GetString(3)), reader.GetString(4), reader.GetFieldValue<DateTimeOffset>(5))
             : null;
     }
 
@@ -410,9 +410,9 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
                 count(*) FILTER (WHERE overall_status = 'degraded')::int,
                 count(*) FILTER (WHERE overall_status = 'critical')::int,
                 count(*) FILTER (WHERE overall_status = 'unknown')::int,
-                (SELECT count(*)::int FROM quality_findings WHERE active = true),
-                (SELECT count(*)::int FROM quality_findings WHERE active = true AND severity = 'critical')
-            FROM quality_status_snapshots
+                (SELECT count(*)::int FROM quality.quality_findings WHERE active = true),
+                (SELECT count(*)::int FROM quality.quality_findings WHERE active = true AND severity = 'critical')
+            FROM quality.quality_status_snapshots
             """);
 
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
@@ -446,7 +446,7 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
         {
             command.Transaction = transaction;
             command.CommandText = """
-                INSERT INTO quality_validation_executions (
+                INSERT INTO quality.quality_validation_executions (
                     id, job_id, trigger_type, status, queued_at, started_at, finished_at,
                     evaluated_start, evaluated_end, config_snapshot, target_snapshot, target_count,
                     completed_count, warning_count, critical_count, technical_failure_count, error)
@@ -463,7 +463,7 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
             command.Parameters.AddWithValue("evaluated_start", result.Start);
             command.Parameters.AddWithValue("evaluated_end", result.End);
             AddJson(command, "config_snapshot", JsonSerializer.SerializeToElement(new { trigger = "manual" }, JsonOptions));
-            AddJson(command, "target_snapshot", JsonSerializer.SerializeToElement(new[] { result.Metadata.Id }, JsonOptions));
+            AddJson(command, "target_snapshot", JsonSerializer.SerializeToElement(new[] { result.Metadata.SeriesId }, JsonOptions));
             command.Parameters.AddWithValue("warning_count", result.Findings.Count(x => x.Severity == "warning"));
             command.Parameters.AddWithValue("critical_count", result.Findings.Count(x => x.Severity == "critical"));
             await command.ExecuteNonQueryAsync(cancellationToken);
@@ -473,7 +473,7 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
         {
             command.Transaction = transaction;
             command.CommandText = """
-                INSERT INTO quality_validation_target_executions (
+                INSERT INTO quality.quality_validation_target_executions (
                     id, execution_id, dataset_id, series_id, status, started_at, finished_at,
                     evaluated_start, evaluated_end, point_count, error)
                 VALUES (
@@ -482,7 +482,7 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
                 """;
             command.Parameters.AddWithValue("id", targetExecutionId);
             command.Parameters.AddWithValue("execution_id", executionId);
-            command.Parameters.AddWithValue("dataset_id", result.Metadata.Id);
+            command.Parameters.AddWithValue("dataset_id", result.Metadata.SeriesId.ToString(System.Globalization.CultureInfo.InvariantCulture));
             command.Parameters.AddWithValue("series_id", result.Metadata.SeriesId);
             command.Parameters.AddWithValue("status", result.OverallStatus);
             command.Parameters.AddWithValue("now", now);
@@ -501,12 +501,12 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
         {
             command.Transaction = transaction;
             command.CommandText = """
-                INSERT INTO quality_status_snapshots (
+                INSERT INTO quality.quality_status_snapshots (
                     dataset_id, series_id, overall_status, category_statuses, latest_execution_id, as_of)
                 VALUES (
                     @dataset_id, @series_id, @overall_status, @category_statuses, @latest_execution_id, @as_of)
                 """;
-            command.Parameters.AddWithValue("dataset_id", result.Metadata.Id);
+            command.Parameters.AddWithValue("dataset_id", result.Metadata.SeriesId.ToString(System.Globalization.CultureInfo.InvariantCulture));
             command.Parameters.AddWithValue("series_id", result.Metadata.SeriesId);
             command.Parameters.AddWithValue("overall_status", result.OverallStatus);
             AddJson(command, "category_statuses", JsonSerializer.SerializeToElement(CategoryStatuses(result.Findings), JsonOptions));
@@ -525,8 +525,8 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
         {
             delete.Transaction = transaction;
             delete.CommandText = """
-                DELETE FROM quality_validation_job_targets WHERE job_id = @job_id;
-                DELETE FROM quality_validation_job_checks WHERE job_id = @job_id;
+                DELETE FROM quality.quality_validation_job_targets WHERE job_id = @job_id;
+                DELETE FROM quality.quality_validation_job_checks WHERE job_id = @job_id;
                 """;
             delete.Parameters.AddWithValue("job_id", jobId);
             await delete.ExecuteNonQueryAsync(cancellationToken);
@@ -537,7 +537,7 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
             await using var command = connection.CreateCommand();
             command.Transaction = transaction;
             command.CommandText = """
-                INSERT INTO quality_validation_job_targets (job_id, target_type, target_id, rule)
+                INSERT INTO quality.quality_validation_job_targets (job_id, target_type, target_id, rule)
                 VALUES (@job_id, @target_type, @target_id, @rule)
                 """;
             command.Parameters.AddWithValue("job_id", jobId);
@@ -553,7 +553,7 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
             await using var command = connection.CreateCommand();
             command.Transaction = transaction;
             command.CommandText = """
-                INSERT INTO quality_validation_job_checks (
+                INSERT INTO quality.quality_validation_job_checks (
                     id, job_id, validator_id, validator_version, enabled, configuration, severity, sort_order)
                 VALUES (
                     @id, @job_id, @validator_id, @validator_version, @enabled, @configuration, @severity, @sort_order)
@@ -580,11 +580,11 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
         DateTimeOffset now,
         CancellationToken cancellationToken)
     {
-        var fingerprint = $"{metadata.Id}:{finding.ValidatorId}:{finding.AffectedStart:O}:{finding.AffectedEnd:O}";
+        var fingerprint = $"{metadata.SeriesId}:{finding.ValidatorId}:{finding.AffectedStart:O}:{finding.AffectedEnd:O}";
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """
-            INSERT INTO quality_findings (
+            INSERT INTO quality.quality_findings (
                 id, execution_id, target_execution_id, validator_execution_id, dataset_id, series_id,
                 validator_id, category, severity, quality_status, trading_impact, title, message,
                 affected_start, affected_end, expected_count, actual_count, affected_count,
@@ -598,7 +598,7 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
         command.Parameters.AddWithValue("id", $"quality-finding-{Guid.NewGuid():N}");
         command.Parameters.AddWithValue("execution_id", executionId);
         command.Parameters.AddWithValue("target_execution_id", targetExecutionId);
-        command.Parameters.AddWithValue("dataset_id", metadata.Id);
+        command.Parameters.AddWithValue("dataset_id", metadata.SeriesId.ToString(System.Globalization.CultureInfo.InvariantCulture));
         command.Parameters.AddWithValue("series_id", metadata.SeriesId);
         command.Parameters.AddWithValue("validator_id", finding.ValidatorId);
         command.Parameters.AddWithValue("category", finding.Category);
@@ -643,9 +643,9 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
             COALESCE(jsonb_agg(DISTINCT jsonb_build_object('id', c.id, 'validatorId', c.validator_id, 'validatorVersion', c.validator_version,
                 'enabled', c.enabled, 'configuration', c.configuration, 'severity', c.severity, 'sortOrder', c.sort_order))
                 FILTER (WHERE c.job_id IS NOT NULL), '[]'::jsonb)::text
-        FROM quality_validation_jobs j
-        LEFT JOIN quality_validation_job_targets t ON t.job_id = j.id
-        LEFT JOIN quality_validation_job_checks c ON c.job_id = j.id
+        FROM quality.quality_validation_jobs j
+        LEFT JOIN quality.quality_validation_job_targets t ON t.job_id = j.id
+        LEFT JOIN quality.quality_validation_job_checks c ON c.job_id = j.id
         """;
 
     private static string BuildJobSelectSql(string? where = null, bool orderBy = true) => $"""
@@ -696,7 +696,7 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
     private static QualitySeriesGroupMemberDto ReadGroupMember(NpgsqlDataReader reader) => new(
         reader.GetString(0),
         reader.GetString(1),
-        reader.GetString(2),
+        reader.GetInt64(2),
         reader.GetFieldValue<DateTimeOffset>(3));
 
     private static QualityFindingDto ReadFinding(NpgsqlDataReader reader) => new(
@@ -705,7 +705,7 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
         reader.IsDBNull(2) ? null : reader.GetString(2),
         reader.IsDBNull(3) ? null : reader.GetString(3),
         reader.GetString(4),
-        reader.GetString(5),
+        reader.GetInt64(5),
         reader.GetString(6),
         reader.GetString(7),
         reader.GetString(8),
@@ -734,6 +734,17 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
 
         clauses.Add($"{column} = @{column}");
         command.Parameters.AddWithValue(column, value);
+    }
+
+    private static void AddSeriesFilter(NpgsqlCommand command, List<string> clauses, long? seriesId)
+    {
+        if (!seriesId.HasValue)
+        {
+            return;
+        }
+
+        clauses.Add("series_id = @series_id");
+        command.Parameters.AddWithValue("series_id", seriesId.Value);
     }
 
     private static void AddFilter(NpgsqlCommand command, List<string> clauses, string column, string parameter, string? value)

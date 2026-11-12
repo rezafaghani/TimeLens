@@ -1,6 +1,7 @@
 export interface MarketSeries {
-  id: string;
-  seriesId: string;
+  seriesId: number;
+  definitionId: string;
+  providerSeriesId: string;
   provider: string;
   exchange: string;
   symbol: string;

@@ -16,39 +16,23 @@ public class RabbitMqMarketDataUpdatePublisher(TimeLensContext context, IOptions
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly RabbitMqOptions _options = options.Value;
 
-    public async Task PublishAsync(string datasetId, TimeSeriesWritePoint point, DateTimeOffset asOf, string operation, CancellationToken cancellationToken = default)
+    public async Task PublishBatchAsync(
+        long seriesId,
+        IReadOnlyList<TimeSeriesWritePoint> points,
+        DateTimeOffset asOf,
+        string operation,
+        CancellationToken cancellationToken = default)
     {
-        var metadata = await GetMetadataAsync(datasetId, cancellationToken);
-        if (metadata is null)
+        if (points.Count == 0)
         {
             return;
         }
 
-        var message = new MarketDataUpdatedEvent
+        var metadata = await GetMetadataAsync(seriesId, cancellationToken);
+        if (metadata is null)
         {
-            DatasetId = metadata.Id,
-            SeriesId = metadata.SeriesId,
-            ProviderId = metadata.Provider,
-            Exchange = metadata.Exchange,
-            InstrumentId = metadata.ProviderInstrumentId,
-            Symbol = metadata.Symbol,
-            MarketDataType = metadata.MarketDataType,
-            Timeframe = metadata.Timeframe,
-            Operation = operation,
-            DataTimestamp = point.Timestamp,
-            AsOf = asOf,
-            Bar = point
-        };
-
-        using var activity = TimeLensTelemetry.ActivitySource.StartActivity("MarketDataUpdatePublication", ActivityKind.Producer);
-        activity?.SetTag("messaging.system", "rabbitmq");
-        activity?.SetTag("messaging.destination.name", _options.MarketDataUpdatesQueueName);
-        activity?.SetTag("messaging.operation.name", "publish");
-        activity?.SetTag("market.provider", message.ProviderId);
-        activity?.SetTag("market.symbol", message.Symbol);
-        activity?.SetTag("market.timeframe", message.Timeframe);
-        activity?.SetTag("market.data_timestamp", message.DataTimestamp.ToUnixTimeMilliseconds());
-        activity?.SetTag("messaging.message_id", message.EventId);
+            return;
+        }
 
         var factory = new ConnectionFactory
         {
@@ -70,35 +54,64 @@ public class RabbitMqMarketDataUpdatePublisher(TimeLensContext context, IOptions
             cancellationToken: cancellationToken);
         await channel.QueueBindAsync(_options.MarketDataUpdatesQueueName, _options.ExchangeName, _options.MarketDataUpdatesQueueName, cancellationToken: cancellationToken);
 
-        var properties = new BasicProperties
+        foreach (var point in points)
         {
-            ContentType = "application/json",
-            DeliveryMode = DeliveryModes.Persistent,
-            MessageId = message.EventId,
-            Type = nameof(MarketDataUpdatedEvent),
-            Timestamp = new AmqpTimestamp(DateTimeOffset.UtcNow.ToUnixTimeSeconds())
-        };
-        RabbitMqTraceContext.Inject(properties);
-        var body = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(message, JsonOptions));
-        await channel.BasicPublishAsync(_options.ExchangeName, _options.MarketDataUpdatesQueueName, true, properties, body, cancellationToken);
-        TimeLensTelemetry.MessagesPublished.Add(1, KeyValuePair.Create<string, object?>("messaging.destination.name", _options.MarketDataUpdatesQueueName));
+            var message = new MarketDataUpdatedEvent
+            {
+                SeriesId = metadata.SeriesId,
+                ProviderSeriesId = metadata.ProviderSeriesId,
+                ProviderId = metadata.Provider,
+                Exchange = metadata.Exchange,
+                InstrumentId = metadata.ProviderInstrumentId,
+                Symbol = metadata.Symbol,
+                MarketDataType = metadata.MarketDataType,
+                Timeframe = metadata.Timeframe,
+                Operation = operation,
+                DataTimestamp = point.Timestamp,
+                AsOf = asOf,
+                Bar = point
+            };
+
+            using var activity = TimeLensTelemetry.ActivitySource.StartActivity("MarketDataUpdatePublication", ActivityKind.Producer);
+            activity?.SetTag("messaging.system", "rabbitmq");
+            activity?.SetTag("messaging.destination.name", _options.MarketDataUpdatesQueueName);
+            activity?.SetTag("messaging.operation.name", "publish");
+            activity?.SetTag("market.provider", message.ProviderId);
+            activity?.SetTag("market.symbol", message.Symbol);
+            activity?.SetTag("market.timeframe", message.Timeframe);
+            activity?.SetTag("market.data_timestamp", message.DataTimestamp.ToUnixTimeMilliseconds());
+            activity?.SetTag("messaging.message_id", message.EventId);
+
+            var properties = new BasicProperties
+            {
+                ContentType = "application/json",
+                DeliveryMode = DeliveryModes.Persistent,
+                MessageId = message.EventId,
+                Type = nameof(MarketDataUpdatedEvent),
+                Timestamp = new AmqpTimestamp(DateTimeOffset.UtcNow.ToUnixTimeSeconds())
+            };
+            RabbitMqTraceContext.Inject(properties);
+            var body = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(message, JsonOptions));
+            await channel.BasicPublishAsync(_options.ExchangeName, _options.MarketDataUpdatesQueueName, true, properties, body, cancellationToken);
+            TimeLensTelemetry.MessagesPublished.Add(1, KeyValuePair.Create<string, object?>("messaging.destination.name", _options.MarketDataUpdatesQueueName));
+        }
     }
 
-    private async Task<DatasetMetadataDto?> GetMetadataAsync(string datasetId, CancellationToken cancellationToken)
+    private async Task<DatasetMetadataDto?> GetMetadataAsync(long seriesId, CancellationToken cancellationToken)
     {
         await using var command = context.Postgres.CreateCommand("""
-            SELECT id, series_id, provider, exchange, symbol, market_data_type, timeframe, provider_instrument_id
-            FROM market_data_series
-            WHERE id = @id
+            SELECT series_id, provider_series_id, provider, exchange, symbol, market_data_type, timeframe, provider_instrument_id
+            FROM market_data.market_data_series
+            WHERE series_id = @series_id
             """);
-        command.Parameters.AddWithValue("id", datasetId);
+        command.Parameters.AddWithValue("series_id", seriesId);
 
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         return await reader.ReadAsync(cancellationToken)
             ? new DatasetMetadataDto
             {
-                Id = reader.GetString(0),
-                SeriesId = reader.GetString(1),
+                SeriesId = reader.GetInt64(0),
+                ProviderSeriesId = reader.GetString(1),
                 Provider = reader.GetString(2),
                 Exchange = reader.GetString(3),
                 Symbol = reader.GetString(4),

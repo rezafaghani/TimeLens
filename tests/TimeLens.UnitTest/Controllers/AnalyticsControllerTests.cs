@@ -10,8 +10,8 @@ public class AnalyticsControllerTests
     public async Task Correlation_RejectsInvalidBucket()
     {
         var result = await new AnalyticsController(Mock.Of<ITimeSeriesRepository>()).Correlation(
-            "crypto",
-            "energy",
+            5,
+            1,
             "2026-01-01T00:00:00Z",
             "2026-01-02T00:00:00Z",
             "invalid",
