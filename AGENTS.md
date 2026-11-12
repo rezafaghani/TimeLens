@@ -2,13 +2,13 @@
 
 ## Project Structure & Module Organization
 
-TimeLens is a .NET 10 solution with a React/Vite client. Backend projects live under `src/`: `TimeLens.API` is the main HTTP API including dataset/time-series reads, `TimeLens.Insert` handles inserts and gRPC ingestion writes, and `TimeLens.Ingestion` plus `TimeLens.Scheduler` run background ingestion. Shared domain models and interfaces are in `src/TimeLens.Domain`; PostgreSQL and ClickHouse repositories and infrastructure live in `src/TimeLens.Infrastructure`. The client app is in `src/TimeLens.Client`. Unit tests are in `tests/TimeLens.UnitTest`, with fixtures in `tests/TimeLens.UnitTest/TestData`.
+TimeLens is a .NET 11 solution with a React/Vite client. Backend projects live under `src/`: `TimeLens.API` is the main HTTP API, `TimeLens.Ingestion` fetches provider data and writes artifacts to SeaweedFS, and `TimeLens.Insert` consumes artifact messages from RabbitMQ and writes to ClickHouse. `TimeLens.Scheduler` queues ingestion and validation jobs. Shared domain models and interfaces are in `src/TimeLens.Domain`; PostgreSQL and ClickHouse repositories and infrastructure live in `src/TimeLens.Infrastructure`. The client app is in `src/TimeLens.Client`. Unit tests are in `tests/TimeLens.UnitTest`, with fixtures in `tests/TimeLens.UnitTest/TestData`.
 
 ## Build, Test, and Development Commands
 
-- `dotnet restore TimeLens.sln`: restore backend dependencies.
-- `dotnet build TimeLens.sln`: compile all .NET projects.
-- `dotnet test TimeLens.sln`: run xUnit backend tests.
+- `dotnet restore TimeLens.slnx`: restore backend dependencies.
+- `dotnet build TimeLens.slnx`: compile all .NET projects.
+- `dotnet test TimeLens.slnx`: run xUnit backend tests.
 - `dotnet run --project src/TimeLens.API/TimeLens.API.csproj`: run the API locally.
 - `cd src/TimeLens.Client && npm install`: install client dependencies.
 - `cd src/TimeLens.Client && npm start`: start Vite on `127.0.0.1`.

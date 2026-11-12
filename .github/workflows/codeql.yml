@@ -38,10 +38,10 @@ jobs:
           build-mode: manual
 
       - name: Restore dependencies
-        run: dotnet restore TimeLens.sln
+        run: dotnet restore TimeLens.slnx
 
       - name: Build solution
-        run: dotnet build TimeLens.sln --no-restore --configuration Release
+        run: dotnet build TimeLens.slnx --no-restore --configuration Release
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3
