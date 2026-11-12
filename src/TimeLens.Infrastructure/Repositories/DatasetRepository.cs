@@ -51,7 +51,8 @@ public class DatasetRepository(TimeLensContext context) : IDatasetRepository
                 deprecated = EXCLUDED.deprecated,
                 request_parameters = EXCLUDED.request_parameters,
                 provider_metadata = EXCLUDED.provider_metadata,
-                last_available_at = EXCLUDED.last_available_at,
+                first_available_at = LEAST(market_data_series.first_available_at, EXCLUDED.first_available_at),
+                last_available_at = GREATEST(market_data_series.last_available_at, EXCLUDED.last_available_at),
                 last_ingested_at = EXCLUDED.last_ingested_at
             """);
         AddParameters(command, metadata);

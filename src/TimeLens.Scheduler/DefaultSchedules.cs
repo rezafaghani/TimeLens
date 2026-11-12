@@ -4,6 +4,8 @@ namespace TimeLens.Scheduler;
 
 public static class DefaultSchedules
 {
+    public const string EnergyHistoryStartExpression = "2015-01-01";
+
     public static IReadOnlyCollection<IngestionSchedule> Create()
     {
         var schedules = new List<IngestionSchedule>();

@@ -15,6 +15,7 @@ public interface IIngestionControlRepository
     Task<IngestionSchedule?> ResetScheduleAsync(string id, CancellationToken cancellationToken = default);
     Task<IngestionJobMessage?> TryCreateQueuedJobAsync(IngestionSchedule schedule, DateTimeOffset queuedAt, CancellationToken cancellationToken = default);
     Task<IngestionJobMessage> CreateBackloadJobAsync(IngestionSchedule schedule, string endpoint, string source, Dictionary<string, string> parameters, string windowStartExpression, string windowEndExpression, int batchSize, DateTimeOffset queuedAt, CancellationToken cancellationToken = default);
+    Task<IngestionJobMessage?> TryCreateBackloadJobAsync(IngestionSchedule schedule, string endpoint, string source, Dictionary<string, string> parameters, string windowStartExpression, string windowEndExpression, int batchSize, string jobId, DateTimeOffset queuedAt, CancellationToken cancellationToken = default);
     Task MarkJobRunningAsync(string jobId, string executionId, CancellationToken cancellationToken = default);
     Task MarkJobCompletedAsync(string jobId, string executionId, int inserted, int skipped, CancellationToken cancellationToken = default);
     Task MarkJobFailedAsync(string jobId, string executionId, string error, CancellationToken cancellationToken = default);
