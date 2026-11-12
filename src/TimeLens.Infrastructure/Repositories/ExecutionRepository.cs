@@ -42,7 +42,7 @@ public class ExecutionRepository(TimeLensContext context) : IExecutionRepository
         {
             command.Transaction = transaction;
             command.CommandText = """
-                INSERT INTO execution_definitions (
+                INSERT INTO execution.execution_definitions (
                     id, name, description, enabled, cron_expression, time_zone, window_start_expression,
                     window_end_expression, max_parallelism, timeout_seconds, tags, created_at, updated_at)
                 VALUES (
@@ -87,7 +87,7 @@ public class ExecutionRepository(TimeLensContext context) : IExecutionRepository
     public async Task<ExecutionDefinitionDto?> SetDefinitionEnabledAsync(string id, bool enabled, CancellationToken cancellationToken = default)
     {
         await using var command = context.Postgres.CreateCommand("""
-            UPDATE execution_definitions
+            UPDATE execution.execution_definitions
             SET enabled = @enabled, updated_at = @updated_at
             WHERE id = @id
             """);
@@ -101,7 +101,7 @@ public class ExecutionRepository(TimeLensContext context) : IExecutionRepository
     public async Task MarkDefinitionQueuedAsync(string id, DateTimeOffset queuedAt, CancellationToken cancellationToken = default)
     {
         await using var command = context.Postgres.CreateCommand("""
-            UPDATE execution_definitions
+            UPDATE execution.execution_definitions
             SET last_queued_at = @last_queued_at, updated_at = @updated_at
             WHERE id = @id
             """);
@@ -129,7 +129,7 @@ public class ExecutionRepository(TimeLensContext context) : IExecutionRepository
         {
             command.Transaction = transaction;
             command.CommandText = """
-                INSERT INTO execution_runs (
+                INSERT INTO execution.execution_runs (
                     id, definition_id, trigger_type, status, queued_at, started_at, finished_at,
                     evaluated_start, evaluated_end, target_count, completed_count, finding_count, critical_count, error)
                 VALUES (
@@ -155,7 +155,7 @@ public class ExecutionRepository(TimeLensContext context) : IExecutionRepository
             await using var command = connection.CreateCommand();
             command.Transaction = transaction;
             command.CommandText = """
-                INSERT INTO execution_results (
+                INSERT INTO execution.execution_results (
                     id, run_id, plugin_id, target_id, status, result_type, summary, metrics, payload, created_at)
                 VALUES (
                     @id, @run_id, @plugin_id, @target_id, @status, @result_type, @summary, @metrics, @payload, @created_at)
@@ -182,7 +182,7 @@ public class ExecutionRepository(TimeLensContext context) : IExecutionRepository
         var now = DateTimeOffset.UtcNow;
         var runId = $"execution-run-{Guid.NewGuid():N}";
         await using var command = context.Postgres.CreateCommand("""
-            INSERT INTO execution_runs (
+            INSERT INTO execution.execution_runs (
                 id, definition_id, trigger_type, status, queued_at, started_at, finished_at,
                 evaluated_start, evaluated_end, target_count, completed_count, finding_count, critical_count, error)
             VALUES (
@@ -208,7 +208,7 @@ public class ExecutionRepository(TimeLensContext context) : IExecutionRepository
         command.CommandText = $"""
             SELECT id, definition_id, trigger_type, status, queued_at, started_at, finished_at,
                    evaluated_start, evaluated_end, target_count, completed_count, finding_count, critical_count, error
-            FROM execution_runs
+            FROM execution.execution_runs
             {(string.IsNullOrWhiteSpace(definitionId) ? "" : "WHERE definition_id = @definition_id")}
             ORDER BY queued_at DESC
             LIMIT 500
@@ -234,8 +234,8 @@ public class ExecutionRepository(TimeLensContext context) : IExecutionRepository
         {
             delete.Transaction = transaction;
             delete.CommandText = """
-                DELETE FROM execution_definition_targets WHERE definition_id = @definition_id;
-                DELETE FROM execution_definition_plugins WHERE definition_id = @definition_id;
+                DELETE FROM execution.execution_definition_targets WHERE definition_id = @definition_id;
+                DELETE FROM execution.execution_definition_plugins WHERE definition_id = @definition_id;
                 """;
             delete.Parameters.AddWithValue("definition_id", definitionId);
             await delete.ExecuteNonQueryAsync(cancellationToken);
@@ -246,7 +246,7 @@ public class ExecutionRepository(TimeLensContext context) : IExecutionRepository
             await using var command = connection.CreateCommand();
             command.Transaction = transaction;
             command.CommandText = """
-                INSERT INTO execution_definition_targets (definition_id, target_type, target_id, rule)
+                INSERT INTO execution.execution_definition_targets (definition_id, target_type, target_id, rule)
                 VALUES (@definition_id, @target_type, @target_id, @rule)
                 """;
             command.Parameters.AddWithValue("definition_id", definitionId);
@@ -262,7 +262,7 @@ public class ExecutionRepository(TimeLensContext context) : IExecutionRepository
             await using var command = connection.CreateCommand();
             command.Transaction = transaction;
             command.CommandText = """
-                INSERT INTO execution_definition_plugins (
+                INSERT INTO execution.execution_definition_plugins (
                     id, definition_id, plugin_id, plugin_version, enabled, configuration, severity, sort_order)
                 VALUES (
                     @id, @definition_id, @plugin_id, @plugin_version, @enabled, @configuration, @severity, @sort_order)
@@ -289,9 +289,9 @@ public class ExecutionRepository(TimeLensContext context) : IExecutionRepository
             COALESCE(jsonb_agg(DISTINCT jsonb_build_object('id', p.id, 'pluginId', p.plugin_id, 'pluginVersion', p.plugin_version,
                 'enabled', p.enabled, 'configuration', p.configuration, 'severity', p.severity, 'sortOrder', p.sort_order))
                 FILTER (WHERE p.definition_id IS NOT NULL), '[]'::jsonb)::text
-        FROM execution_definitions d
-        LEFT JOIN execution_definition_targets t ON t.definition_id = d.id
-        LEFT JOIN execution_definition_plugins p ON p.definition_id = d.id
+        FROM execution.execution_definitions d
+        LEFT JOIN execution.execution_definition_targets t ON t.definition_id = d.id
+        LEFT JOIN execution.execution_definition_plugins p ON p.definition_id = d.id
         """;
 
     private static string BuildDefinitionSelectSql(string? where = null, bool orderBy = true) => $"""

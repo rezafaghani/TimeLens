@@ -6,6 +6,33 @@ using Npgsql;
 public sealed class TimeLensContext
 {
     private static readonly SemaphoreSlim ClickHouseMigrationLock = new(1, 1);
+    private static readonly (string Schema, string Table)[] PostgresTables =
+    [
+        ("market_data", "canonical_series_registry"),
+        ("market_data", "market_data_series"),
+        ("ingestion", "ingestion_schedules"),
+        ("ingestion", "ingestion_jobs"),
+        ("ingestion", "ingestion_executions"),
+        ("ingestion", "ingestion_artifacts"),
+        ("ingestion", "ingestion_artifact_hashes"),
+        ("execution", "execution_definitions"),
+        ("execution", "execution_definition_targets"),
+        ("execution", "execution_definition_plugins"),
+        ("execution", "execution_runs"),
+        ("execution", "execution_results"),
+        ("quality", "quality_series_groups"),
+        ("quality", "quality_series_group_members"),
+        ("quality", "quality_validation_plugins"),
+        ("quality", "quality_validation_templates"),
+        ("quality", "quality_validation_jobs"),
+        ("quality", "quality_validation_job_targets"),
+        ("quality", "quality_validation_job_checks"),
+        ("quality", "quality_validation_executions"),
+        ("quality", "quality_validation_target_executions"),
+        ("quality", "quality_findings"),
+        ("quality", "quality_status_snapshots"),
+        ("legacy", "quality_validator_executions")
+    ];
     private readonly NpgsqlDataSource? _postgres;
 
     public TimeLensContext(string? postgresConnectionString, string? clickHouseConnectionString)
@@ -40,10 +67,41 @@ public sealed class TimeLensContext
         }
     }
 
+    private async Task EnsurePostgresSchemasAsync(CancellationToken cancellationToken)
+    {
+        await using var lockConnection = await Postgres.OpenConnectionAsync(cancellationToken);
+        await using (var lockCommand = new NpgsqlCommand("SELECT pg_advisory_lock(731946120519)", lockConnection))
+        {
+            await lockCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        try
+        {
+            foreach (var schema in new[] { "market_data", "ingestion", "execution", "quality", "legacy" })
+            {
+                await ExecutePostgresAsync($"CREATE SCHEMA IF NOT EXISTS {schema}", cancellationToken);
+            }
+
+            foreach (var (schema, table) in PostgresTables)
+            {
+                await ExecutePostgresAsync(
+                    $"ALTER TABLE IF EXISTS public.{table} SET SCHEMA {schema}",
+                    cancellationToken);
+            }
+        }
+        finally
+        {
+            await using var unlockCommand = new NpgsqlCommand("SELECT pg_advisory_unlock(731946120519)", lockConnection);
+            await unlockCommand.ExecuteNonQueryAsync(CancellationToken.None);
+        }
+    }
+
     public async Task EnsurePostgresSchemaAsync(CancellationToken cancellationToken = default)
     {
+        await EnsurePostgresSchemasAsync(cancellationToken);
+
         const string sql = """
-            CREATE TABLE IF NOT EXISTS ingestion_schedules (
+            CREATE TABLE IF NOT EXISTS ingestion.ingestion_schedules (
                 id text PRIMARY KEY,
                 series_id bigint NOT NULL,
                 name text NOT NULL,
@@ -64,7 +122,7 @@ public sealed class TimeLensContext
                 updated_at timestamptz NOT NULL
             );
 
-            CREATE TABLE IF NOT EXISTS canonical_series_registry (
+            CREATE TABLE IF NOT EXISTS market_data.canonical_series_registry (
                 series_id bigint PRIMARY KEY,
                 provider text NOT NULL,
                 provider_series_id text NOT NULL,
@@ -73,9 +131,9 @@ public sealed class TimeLensContext
             );
 
             CREATE INDEX IF NOT EXISTS ix_ingestion_schedules_enabled_series
-                ON ingestion_schedules(enabled, series_id);
+                ON ingestion.ingestion_schedules(enabled, series_id);
 
-            CREATE TABLE IF NOT EXISTS ingestion_jobs (
+            CREATE TABLE IF NOT EXISTS ingestion.ingestion_jobs (
                 id text PRIMARY KEY,
                 schedule_id text NOT NULL,
                 series_id bigint NOT NULL,
@@ -87,9 +145,9 @@ public sealed class TimeLensContext
             );
 
             CREATE INDEX IF NOT EXISTS ix_ingestion_jobs_schedule_series_queued
-                ON ingestion_jobs(schedule_id, series_id, queued_at DESC);
+                ON ingestion.ingestion_jobs(schedule_id, series_id, queued_at DESC);
 
-            CREATE TABLE IF NOT EXISTS ingestion_executions (
+            CREATE TABLE IF NOT EXISTS ingestion.ingestion_executions (
                 id text PRIMARY KEY,
                 job_id text NOT NULL,
                 schedule_id text NOT NULL,
@@ -105,15 +163,15 @@ public sealed class TimeLensContext
                 error text NOT NULL
             );
 
-            ALTER TABLE ingestion_executions
+            ALTER TABLE ingestion.ingestion_executions
                 ADD COLUMN IF NOT EXISTS artifacts_expected integer NOT NULL DEFAULT 0;
-            ALTER TABLE ingestion_executions
+            ALTER TABLE ingestion.ingestion_executions
                 ADD COLUMN IF NOT EXISTS artifacts_completed integer NOT NULL DEFAULT 0;
 
             CREATE INDEX IF NOT EXISTS ix_ingestion_executions_job_schedule_series_created
-                ON ingestion_executions(job_id, schedule_id, series_id, created_at DESC);
+                ON ingestion.ingestion_executions(job_id, schedule_id, series_id, created_at DESC);
 
-            CREATE TABLE IF NOT EXISTS ingestion_artifacts (
+            CREATE TABLE IF NOT EXISTS ingestion.ingestion_artifacts (
                 id uuid PRIMARY KEY,
                 job_id text NOT NULL,
                 execution_id text NOT NULL,
@@ -130,7 +188,7 @@ public sealed class TimeLensContext
                 status text NOT NULL,
                 inserted_count integer NOT NULL DEFAULT 0,
                 skipped_count integer NOT NULL DEFAULT 0,
-                duplicate_of uuid NULL REFERENCES ingestion_artifacts(id),
+                duplicate_of uuid NULL REFERENCES ingestion.ingestion_artifacts(id),
                 attempts integer NOT NULL DEFAULT 0,
                 error text NOT NULL DEFAULT '',
                 created_at timestamptz NOT NULL,
@@ -139,21 +197,21 @@ public sealed class TimeLensContext
             );
 
             CREATE INDEX IF NOT EXISTS ix_ingestion_artifacts_series_ingested
-                ON ingestion_artifacts(series_id, ingested_at DESC);
+                ON ingestion.ingestion_artifacts(series_id, ingested_at DESC);
 
             CREATE INDEX IF NOT EXISTS ix_ingestion_artifacts_status_created
-                ON ingestion_artifacts(status, created_at);
+                ON ingestion.ingestion_artifacts(status, created_at);
 
-            CREATE TABLE IF NOT EXISTS ingestion_artifact_hashes (
+            CREATE TABLE IF NOT EXISTS ingestion.ingestion_artifact_hashes (
                 series_id bigint NOT NULL,
                 parsed_sha256 text NOT NULL,
-                ingestion_id uuid NOT NULL REFERENCES ingestion_artifacts(id),
+                ingestion_id uuid NOT NULL REFERENCES ingestion.ingestion_artifacts(id),
                 status text NOT NULL,
                 updated_at timestamptz NOT NULL,
                 PRIMARY KEY (series_id, parsed_sha256)
             );
 
-            CREATE TABLE IF NOT EXISTS market_data_series (
+            CREATE TABLE IF NOT EXISTS market_data.market_data_series (
                 definition_id text NOT NULL,
                 series_id bigint PRIMARY KEY,
                 provider_series_id text NOT NULL,
@@ -183,9 +241,9 @@ public sealed class TimeLensContext
             );
 
             CREATE INDEX IF NOT EXISTS ix_market_data_series_filters
-                ON market_data_series(provider, exchange, symbol, asset_class, market_data_type, timeframe);
+                ON market_data.market_data_series(provider, exchange, symbol, asset_class, market_data_type, timeframe);
 
-            CREATE TABLE IF NOT EXISTS execution_definitions (
+            CREATE TABLE IF NOT EXISTS execution.execution_definitions (
                 id text PRIMARY KEY,
                 name text NOT NULL,
                 description text NOT NULL,
@@ -203,18 +261,18 @@ public sealed class TimeLensContext
             );
 
             CREATE INDEX IF NOT EXISTS ix_execution_definitions_enabled
-                ON execution_definitions(enabled, updated_at DESC);
+                ON execution.execution_definitions(enabled, updated_at DESC);
 
-            CREATE TABLE IF NOT EXISTS execution_definition_targets (
-                definition_id text NOT NULL REFERENCES execution_definitions(id) ON DELETE CASCADE,
+            CREATE TABLE IF NOT EXISTS execution.execution_definition_targets (
+                definition_id text NOT NULL REFERENCES execution.execution_definitions(id) ON DELETE CASCADE,
                 target_type text NOT NULL,
                 target_id text NOT NULL,
                 rule jsonb NOT NULL
             );
 
-            CREATE TABLE IF NOT EXISTS execution_definition_plugins (
+            CREATE TABLE IF NOT EXISTS execution.execution_definition_plugins (
                 id text PRIMARY KEY,
-                definition_id text NOT NULL REFERENCES execution_definitions(id) ON DELETE CASCADE,
+                definition_id text NOT NULL REFERENCES execution.execution_definitions(id) ON DELETE CASCADE,
                 plugin_id text NOT NULL,
                 plugin_version integer NOT NULL,
                 enabled boolean NOT NULL,
@@ -223,7 +281,7 @@ public sealed class TimeLensContext
                 sort_order integer NOT NULL
             );
 
-            CREATE TABLE IF NOT EXISTS execution_runs (
+            CREATE TABLE IF NOT EXISTS execution.execution_runs (
                 id text PRIMARY KEY,
                 definition_id text NOT NULL,
                 trigger_type text NOT NULL,
@@ -240,9 +298,9 @@ public sealed class TimeLensContext
                 error text NOT NULL
             );
 
-            CREATE TABLE IF NOT EXISTS execution_results (
+            CREATE TABLE IF NOT EXISTS execution.execution_results (
                 id text PRIMARY KEY,
-                run_id text NOT NULL REFERENCES execution_runs(id) ON DELETE CASCADE,
+                run_id text NOT NULL REFERENCES execution.execution_runs(id) ON DELETE CASCADE,
                 plugin_id text NOT NULL,
                 target_id text NOT NULL,
                 status text NOT NULL,
@@ -253,7 +311,7 @@ public sealed class TimeLensContext
                 created_at timestamptz NOT NULL
             );
 
-            CREATE TABLE IF NOT EXISTS quality_series_groups (
+            CREATE TABLE IF NOT EXISTS quality.quality_series_groups (
                 id text PRIMARY KEY,
                 name text NOT NULL,
                 description text NOT NULL,
@@ -265,15 +323,15 @@ public sealed class TimeLensContext
                 updated_at timestamptz NOT NULL
             );
 
-            CREATE TABLE IF NOT EXISTS quality_series_group_members (
-                group_id text NOT NULL REFERENCES quality_series_groups(id) ON DELETE CASCADE,
+            CREATE TABLE IF NOT EXISTS quality.quality_series_group_members (
+                group_id text NOT NULL REFERENCES quality.quality_series_groups(id) ON DELETE CASCADE,
                 dataset_id text NOT NULL,
                 series_id bigint NOT NULL,
                 created_at timestamptz NOT NULL,
                 PRIMARY KEY (group_id, dataset_id)
             );
 
-            CREATE TABLE IF NOT EXISTS quality_validation_plugins (
+            CREATE TABLE IF NOT EXISTS quality.quality_validation_plugins (
                 id text PRIMARY KEY,
                 category text NOT NULL,
                 display_name text NOT NULL,
@@ -287,7 +345,7 @@ public sealed class TimeLensContext
                 updated_at timestamptz NOT NULL
             );
 
-            CREATE TABLE IF NOT EXISTS quality_validation_templates (
+            CREATE TABLE IF NOT EXISTS quality.quality_validation_templates (
                 id text PRIMARY KEY,
                 name text NOT NULL,
                 description text NOT NULL,
@@ -296,13 +354,13 @@ public sealed class TimeLensContext
                 updated_at timestamptz NOT NULL
             );
 
-            INSERT INTO quality_validation_templates (id, name, description, tags, created_at, updated_at)
+            INSERT INTO quality.quality_validation_templates (id, name, description, tags, created_at, updated_at)
             VALUES ('default-validation-template', 'Default validation template', 'Default template for validation schedules.', '{}'::jsonb, now(), now())
             ON CONFLICT (id) DO NOTHING;
 
-            CREATE TABLE IF NOT EXISTS quality_validation_jobs (
+            CREATE TABLE IF NOT EXISTS quality.quality_validation_jobs (
                 id text PRIMARY KEY,
-                template_id text NOT NULL DEFAULT 'default-validation-template' REFERENCES quality_validation_templates(id),
+                template_id text NOT NULL DEFAULT 'default-validation-template' REFERENCES quality.quality_validation_templates(id),
                 name text NOT NULL,
                 description text NOT NULL,
                 enabled boolean NOT NULL,
@@ -318,16 +376,16 @@ public sealed class TimeLensContext
                 updated_at timestamptz NOT NULL
             );
 
-            CREATE TABLE IF NOT EXISTS quality_validation_job_targets (
-                job_id text NOT NULL REFERENCES quality_validation_jobs(id) ON DELETE CASCADE,
+            CREATE TABLE IF NOT EXISTS quality.quality_validation_job_targets (
+                job_id text NOT NULL REFERENCES quality.quality_validation_jobs(id) ON DELETE CASCADE,
                 target_type text NOT NULL,
                 target_id text NOT NULL,
                 rule jsonb NOT NULL
             );
 
-            CREATE TABLE IF NOT EXISTS quality_validation_job_checks (
+            CREATE TABLE IF NOT EXISTS quality.quality_validation_job_checks (
                 id text PRIMARY KEY,
-                job_id text NOT NULL REFERENCES quality_validation_jobs(id) ON DELETE CASCADE,
+                job_id text NOT NULL REFERENCES quality.quality_validation_jobs(id) ON DELETE CASCADE,
                 validator_id text NOT NULL,
                 validator_version integer NOT NULL,
                 enabled boolean NOT NULL,
@@ -336,7 +394,7 @@ public sealed class TimeLensContext
                 sort_order integer NOT NULL
             );
 
-            CREATE TABLE IF NOT EXISTS quality_validation_executions (
+            CREATE TABLE IF NOT EXISTS quality.quality_validation_executions (
                 id text PRIMARY KEY,
                 job_id text NOT NULL,
                 trigger_type text NOT NULL,
@@ -356,9 +414,9 @@ public sealed class TimeLensContext
                 error text NOT NULL
             );
 
-            CREATE TABLE IF NOT EXISTS quality_validation_target_executions (
+            CREATE TABLE IF NOT EXISTS quality.quality_validation_target_executions (
                 id text PRIMARY KEY,
-                execution_id text NOT NULL REFERENCES quality_validation_executions(id) ON DELETE CASCADE,
+                execution_id text NOT NULL REFERENCES quality.quality_validation_executions(id) ON DELETE CASCADE,
                 dataset_id text NOT NULL,
                 series_id bigint NOT NULL,
                 status text NOT NULL,
@@ -370,18 +428,7 @@ public sealed class TimeLensContext
                 error text NOT NULL
             );
 
-            CREATE TABLE IF NOT EXISTS quality_validator_executions (
-                id text PRIMARY KEY,
-                target_execution_id text NOT NULL REFERENCES quality_validation_target_executions(id) ON DELETE CASCADE,
-                validator_id text NOT NULL,
-                status text NOT NULL,
-                severity text NOT NULL,
-                duration_ms integer NOT NULL,
-                metrics jsonb NOT NULL,
-                error text NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS quality_findings (
+            CREATE TABLE IF NOT EXISTS quality.quality_findings (
                 id text PRIMARY KEY,
                 execution_id text NOT NULL,
                 target_execution_id text NULL,
@@ -409,9 +456,9 @@ public sealed class TimeLensContext
             );
 
             CREATE INDEX IF NOT EXISTS ix_quality_findings_active_series
-                ON quality_findings(active, dataset_id, series_id, severity, updated_at DESC);
+                ON quality.quality_findings(active, dataset_id, series_id, severity, updated_at DESC);
 
-            CREATE TABLE IF NOT EXISTS quality_status_snapshots (
+            CREATE TABLE IF NOT EXISTS quality.quality_status_snapshots (
                 dataset_id text NOT NULL,
                 series_id bigint NOT NULL,
                 overall_status text NOT NULL,
@@ -422,7 +469,7 @@ public sealed class TimeLensContext
             );
 
             CREATE INDEX IF NOT EXISTS ix_quality_status_snapshots_series_latest
-                ON quality_status_snapshots(dataset_id, series_id, as_of DESC);
+                ON quality.quality_status_snapshots(dataset_id, series_id, as_of DESC);
             """;
 
         await using var command = Postgres.CreateCommand(sql);
@@ -438,72 +485,72 @@ public sealed class TimeLensContext
         {
             await SeedCanonicalSeriesRegistryAsync(cancellationToken);
             await MigrateMarketDataSeriesAsync(cancellationToken);
-            await MigrateStringSeriesIdAsync("ingestion_schedules", """
-            UPDATE ingestion_schedules target
+            await MigrateStringSeriesIdAsync("ingestion.ingestion_schedules", """
+            UPDATE ingestion.ingestion_schedules target
             SET series_id_numeric = registry.series_id
-            FROM canonical_series_registry registry
+            FROM market_data.canonical_series_registry registry
             WHERE lower(target.source) = registry.provider
               AND lower(target.series_id) = registry.provider_series_id
               AND lower(COALESCE(target.parameters->>'timeframe', target.parameters->>'frequency', '')) = registry.timeframe
             """, cancellationToken);
-            await MigrateStringSeriesIdAsync("ingestion_jobs", """
-            UPDATE ingestion_jobs target
+            await MigrateStringSeriesIdAsync("ingestion.ingestion_jobs", """
+            UPDATE ingestion.ingestion_jobs target
             SET series_id_numeric = schedule.series_id
-            FROM ingestion_schedules schedule
+            FROM ingestion.ingestion_schedules schedule
             WHERE target.schedule_id = schedule.id
             """, cancellationToken);
-            await MigrateStringSeriesIdAsync("ingestion_executions", """
-            UPDATE ingestion_executions target
+            await MigrateStringSeriesIdAsync("ingestion.ingestion_executions", """
+            UPDATE ingestion.ingestion_executions target
             SET series_id_numeric = schedule.series_id
-            FROM ingestion_schedules schedule
+            FROM ingestion.ingestion_schedules schedule
             WHERE target.schedule_id = schedule.id
             """, cancellationToken);
             await MigrateIngestionArtifactsAsync(cancellationToken);
-            await MigrateStringSeriesIdAsync("ingestion_artifact_hashes", """
-            UPDATE ingestion_artifact_hashes target
+            await MigrateStringSeriesIdAsync("ingestion.ingestion_artifact_hashes", """
+            UPDATE ingestion.ingestion_artifact_hashes target
             SET series_id_numeric = artifact.series_id
-            FROM ingestion_artifacts artifact
+            FROM ingestion.ingestion_artifacts artifact
             WHERE target.ingestion_id = artifact.id
             """, cancellationToken);
-            await MigrateStringSeriesIdAsync("quality_series_group_members", """
-            UPDATE quality_series_group_members target
+            await MigrateStringSeriesIdAsync("quality.quality_series_group_members", """
+            UPDATE quality.quality_series_group_members target
             SET series_id_numeric = series.series_id
-            FROM market_data_series series
+            FROM market_data.market_data_series series
             WHERE target.dataset_id = series.definition_id
             """, cancellationToken);
-            await MigrateStringSeriesIdAsync("quality_validation_target_executions", """
-            UPDATE quality_validation_target_executions target
+            await MigrateStringSeriesIdAsync("quality.quality_validation_target_executions", """
+            UPDATE quality.quality_validation_target_executions target
             SET series_id_numeric = series.series_id
-            FROM market_data_series series
+            FROM market_data.market_data_series series
             WHERE target.dataset_id = series.definition_id
             """, cancellationToken);
-            await MigrateStringSeriesIdAsync("quality_findings", """
-            UPDATE quality_findings target
+            await MigrateStringSeriesIdAsync("quality.quality_findings", """
+            UPDATE quality.quality_findings target
             SET series_id_numeric = series.series_id
-            FROM market_data_series series
+            FROM market_data.market_data_series series
             WHERE target.dataset_id = series.definition_id
             """, cancellationToken);
-            await MigrateStringSeriesIdAsync("quality_status_snapshots", """
-            UPDATE quality_status_snapshots target
+            await MigrateStringSeriesIdAsync("quality.quality_status_snapshots", """
+            UPDATE quality.quality_status_snapshots target
             SET series_id_numeric = series.series_id
-            FROM market_data_series series
+            FROM market_data.market_data_series series
             WHERE target.dataset_id = series.definition_id
             """, cancellationToken);
-            await MigrateSeriesTargetIdsAsync("quality_validation_job_targets", cancellationToken);
-            await MigrateSeriesTargetIdsAsync("execution_definition_targets", cancellationToken);
+            await MigrateSeriesTargetIdsAsync("quality.quality_validation_job_targets", cancellationToken);
+            await MigrateSeriesTargetIdsAsync("execution.execution_definition_targets", cancellationToken);
             await ExecutePostgresAsync("""
             CREATE INDEX IF NOT EXISTS ix_ingestion_schedules_enabled_series
-                ON ingestion_schedules(enabled, series_id);
+                ON ingestion.ingestion_schedules(enabled, series_id);
             CREATE INDEX IF NOT EXISTS ix_ingestion_jobs_schedule_series_queued
-                ON ingestion_jobs(schedule_id, series_id, queued_at DESC);
+                ON ingestion.ingestion_jobs(schedule_id, series_id, queued_at DESC);
             CREATE INDEX IF NOT EXISTS ix_ingestion_executions_job_schedule_series_created
-                ON ingestion_executions(job_id, schedule_id, series_id, created_at DESC);
+                ON ingestion.ingestion_executions(job_id, schedule_id, series_id, created_at DESC);
             CREATE INDEX IF NOT EXISTS ix_ingestion_artifacts_series_ingested
-                ON ingestion_artifacts(series_id, ingested_at DESC);
+                ON ingestion.ingestion_artifacts(series_id, ingested_at DESC);
             CREATE INDEX IF NOT EXISTS ix_quality_findings_active_series
-                ON quality_findings(active, dataset_id, series_id, severity, updated_at DESC);
+                ON quality.quality_findings(active, dataset_id, series_id, severity, updated_at DESC);
             CREATE INDEX IF NOT EXISTS ix_quality_status_snapshots_series_latest
-                ON quality_status_snapshots(dataset_id, series_id, as_of DESC);
+                ON quality.quality_status_snapshots(dataset_id, series_id, as_of DESC);
             """, cancellationToken);
         }
         finally
@@ -567,7 +614,7 @@ public sealed class TimeLensContext
             var legacyIds = new List<(string DefinitionId, long SeriesId)>();
             await using (var readMappings = Postgres.CreateCommand("""
                 SELECT definition_id, series_id
-                FROM market_data_series
+                FROM market_data.market_data_series
                 """))
             await using (var reader = await readMappings.ExecuteReaderAsync(cancellationToken))
             {
@@ -679,7 +726,7 @@ public sealed class TimeLensContext
         foreach (var definition in TimeLens.Domain.Models.CanonicalSeriesRegistry.All)
         {
             await using var insert = Postgres.CreateCommand("""
-                INSERT INTO canonical_series_registry (series_id, provider, provider_series_id, timeframe)
+                INSERT INTO market_data.canonical_series_registry (series_id, provider, provider_series_id, timeframe)
                 VALUES (@series_id, @provider, @provider_series_id, @timeframe)
                 ON CONFLICT DO NOTHING
                 """);
@@ -691,7 +738,7 @@ public sealed class TimeLensContext
 
             await using var verify = Postgres.CreateCommand("""
                 SELECT 1
-                FROM canonical_series_registry
+                FROM market_data.canonical_series_registry
                 WHERE series_id = @series_id
                   AND provider = @provider
                   AND provider_series_id = @provider_series_id
@@ -711,63 +758,63 @@ public sealed class TimeLensContext
 
     private async Task MigrateMarketDataSeriesAsync(CancellationToken cancellationToken)
     {
-        if (await GetSeriesIdColumnTypeAsync("market_data_series", cancellationToken) != "text")
+        if (await GetSeriesIdColumnTypeAsync("market_data.market_data_series", cancellationToken) != "text")
         {
             return;
         }
 
         await ExecutePostgresAsync("""
-            ALTER TABLE market_data_series ADD COLUMN IF NOT EXISTS definition_id text;
-            ALTER TABLE market_data_series ADD COLUMN IF NOT EXISTS provider_series_id text;
-            ALTER TABLE market_data_series ADD COLUMN IF NOT EXISTS series_id_numeric bigint;
-            UPDATE market_data_series
+            ALTER TABLE market_data.market_data_series ADD COLUMN IF NOT EXISTS definition_id text;
+            ALTER TABLE market_data.market_data_series ADD COLUMN IF NOT EXISTS provider_series_id text;
+            ALTER TABLE market_data.market_data_series ADD COLUMN IF NOT EXISTS series_id_numeric bigint;
+            UPDATE market_data.market_data_series
             SET definition_id = COALESCE(definition_id, id),
                 provider_series_id = COALESCE(provider_series_id, series_id);
-            UPDATE market_data_series target
+            UPDATE market_data.market_data_series target
             SET series_id_numeric = registry.series_id
-            FROM canonical_series_registry registry
+            FROM market_data.canonical_series_registry registry
             WHERE lower(target.provider) = registry.provider
               AND lower(target.series_id) = registry.provider_series_id
               AND lower(target.timeframe) = registry.timeframe;
             """, cancellationToken);
-        await EnsureNoUnmappedSeriesIdsAsync("market_data_series", cancellationToken);
+        await EnsureNoUnmappedSeriesIdsAsync("market_data.market_data_series", cancellationToken);
         await ExecutePostgresAsync("""
-            ALTER TABLE market_data_series DROP CONSTRAINT IF EXISTS market_data_series_pkey;
-            ALTER TABLE market_data_series DROP COLUMN IF EXISTS id;
-            ALTER TABLE market_data_series DROP COLUMN series_id;
-            ALTER TABLE market_data_series RENAME COLUMN series_id_numeric TO series_id;
-            ALTER TABLE market_data_series ALTER COLUMN definition_id SET NOT NULL;
-            ALTER TABLE market_data_series ALTER COLUMN provider_series_id SET NOT NULL;
-            CREATE UNIQUE INDEX IF NOT EXISTS ux_market_data_series_series_id ON market_data_series(series_id);
+            ALTER TABLE market_data.market_data_series DROP CONSTRAINT IF EXISTS market_data_series_pkey;
+            ALTER TABLE market_data.market_data_series DROP COLUMN IF EXISTS id;
+            ALTER TABLE market_data.market_data_series DROP COLUMN series_id;
+            ALTER TABLE market_data.market_data_series RENAME COLUMN series_id_numeric TO series_id;
+            ALTER TABLE market_data.market_data_series ALTER COLUMN definition_id SET NOT NULL;
+            ALTER TABLE market_data.market_data_series ALTER COLUMN provider_series_id SET NOT NULL;
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_market_data_series_series_id ON market_data.market_data_series(series_id);
             """, cancellationToken);
     }
 
     private async Task MigrateIngestionArtifactsAsync(CancellationToken cancellationToken)
     {
-        if (await GetSeriesIdColumnTypeAsync("ingestion_artifacts", cancellationToken) != "text")
+        if (await GetSeriesIdColumnTypeAsync("ingestion.ingestion_artifacts", cancellationToken) != "text")
         {
             return;
         }
 
         await ExecutePostgresAsync("""
-            ALTER TABLE ingestion_artifacts RENAME COLUMN dataset_id TO definition_id;
-            ALTER TABLE ingestion_artifacts ALTER COLUMN definition_id DROP NOT NULL;
-            ALTER TABLE ingestion_artifacts ADD COLUMN IF NOT EXISTS provider_series_id text;
-            ALTER TABLE ingestion_artifacts ADD COLUMN IF NOT EXISTS series_id_numeric bigint;
-            UPDATE ingestion_artifacts target
+            ALTER TABLE ingestion.ingestion_artifacts RENAME COLUMN dataset_id TO definition_id;
+            ALTER TABLE ingestion.ingestion_artifacts ALTER COLUMN definition_id DROP NOT NULL;
+            ALTER TABLE ingestion.ingestion_artifacts ADD COLUMN IF NOT EXISTS provider_series_id text;
+            ALTER TABLE ingestion.ingestion_artifacts ADD COLUMN IF NOT EXISTS series_id_numeric bigint;
+            UPDATE ingestion.ingestion_artifacts target
             SET series_id_numeric = series.series_id
-            FROM market_data_series series
+            FROM market_data.market_data_series series
             WHERE target.definition_id = series.definition_id;
-            UPDATE ingestion_artifacts target
+            UPDATE ingestion.ingestion_artifacts target
             SET provider_series_id = registry.provider_series_id
-            FROM canonical_series_registry registry
+            FROM market_data.canonical_series_registry registry
             WHERE target.series_id_numeric = registry.series_id;
             """, cancellationToken);
-        await EnsureNoUnmappedSeriesIdsAsync("ingestion_artifacts", cancellationToken);
+        await EnsureNoUnmappedSeriesIdsAsync("ingestion.ingestion_artifacts", cancellationToken);
         await ExecutePostgresAsync("""
-            ALTER TABLE ingestion_artifacts DROP COLUMN series_id;
-            ALTER TABLE ingestion_artifacts RENAME COLUMN series_id_numeric TO series_id;
-            ALTER TABLE ingestion_artifacts ALTER COLUMN provider_series_id SET NOT NULL;
+            ALTER TABLE ingestion.ingestion_artifacts DROP COLUMN series_id;
+            ALTER TABLE ingestion.ingestion_artifacts RENAME COLUMN series_id_numeric TO series_id;
+            ALTER TABLE ingestion.ingestion_artifacts ALTER COLUMN provider_series_id SET NOT NULL;
             """, cancellationToken);
     }
 
@@ -776,16 +823,16 @@ public sealed class TimeLensContext
         await ExecutePostgresAsync($"""
             UPDATE {tableName} target
             SET target_id = series.series_id::text
-            FROM market_data_series series
+            FROM market_data.market_data_series series
             WHERE lower(target.target_type) IN ('series', 'dataset')
               AND target.target_id = series.definition_id;
             UPDATE {tableName} target
             SET target_id = registry.series_id::text
-            FROM canonical_series_registry registry
+            FROM market_data.canonical_series_registry registry
             WHERE lower(target.target_type) IN ('series', 'dataset')
               AND lower(target.target_id) = registry.provider_series_id
               AND (
-                    (SELECT count(*) FROM canonical_series_registry duplicate
+                    (SELECT count(*) FROM market_data.canonical_series_registry duplicate
                      WHERE duplicate.provider = registry.provider
                        AND duplicate.provider_series_id = registry.provider_series_id) = 1
                     OR registry.timeframe = '1h'
@@ -806,10 +853,10 @@ public sealed class TimeLensContext
         await ExecutePostgresAsync($"ALTER TABLE {tableName} ADD COLUMN IF NOT EXISTS series_id_numeric bigint", cancellationToken);
         await ExecutePostgresAsync(populateSql, cancellationToken);
         await EnsureNoUnmappedSeriesIdsAsync(tableName, cancellationToken);
-        if (tableName == "ingestion_artifact_hashes")
+        if (tableName == "ingestion.ingestion_artifact_hashes")
         {
             await ExecutePostgresAsync(
-                "ALTER TABLE ingestion_artifact_hashes DROP CONSTRAINT IF EXISTS ingestion_artifact_hashes_pkey",
+                "ALTER TABLE ingestion.ingestion_artifact_hashes DROP CONSTRAINT IF EXISTS ingestion_artifact_hashes_pkey",
                 cancellationToken);
         }
 
@@ -817,24 +864,31 @@ public sealed class TimeLensContext
             ALTER TABLE {tableName} DROP COLUMN series_id;
             ALTER TABLE {tableName} RENAME COLUMN series_id_numeric TO series_id
             """, cancellationToken);
-        if (tableName == "ingestion_artifact_hashes")
+        if (tableName == "ingestion.ingestion_artifact_hashes")
         {
             await ExecutePostgresAsync(
-                "ALTER TABLE ingestion_artifact_hashes ADD PRIMARY KEY (series_id, parsed_sha256)",
+                "ALTER TABLE ingestion.ingestion_artifact_hashes ADD PRIMARY KEY (series_id, parsed_sha256)",
                 cancellationToken);
         }
     }
 
     private async Task<string?> GetSeriesIdColumnTypeAsync(string tableName, CancellationToken cancellationToken)
     {
+        var qualifiedName = tableName.Split('.', 2);
+        if (qualifiedName.Length != 2)
+        {
+            throw new ArgumentException("A schema-qualified table name is required.", nameof(tableName));
+        }
+
         await using var command = Postgres.CreateCommand("""
             SELECT data_type
             FROM information_schema.columns
-            WHERE table_schema = current_schema()
+            WHERE table_schema = @schema_name
               AND table_name = @table_name
               AND column_name = 'series_id'
             """);
-        command.Parameters.AddWithValue("table_name", tableName);
+        command.Parameters.AddWithValue("schema_name", qualifiedName[0]);
+        command.Parameters.AddWithValue("table_name", qualifiedName[1]);
         return await command.ExecuteScalarAsync(cancellationToken) as string;
     }
 

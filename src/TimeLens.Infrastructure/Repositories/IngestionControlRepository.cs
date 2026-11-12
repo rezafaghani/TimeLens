@@ -36,7 +36,7 @@ public class IngestionControlRepository(TimeLensContext context) : IIngestionCon
         var (where, parameters) = BuildWhere(("schedule_id", scheduleId), ("series_id", seriesId));
         var sql = $"""
             SELECT id, schedule_id, series_id, status, queued_at, started_at, finished_at, error
-            FROM ingestion_jobs
+            FROM ingestion.ingestion_jobs
             {where}
             ORDER BY queued_at DESC
             LIMIT 500
@@ -70,7 +70,7 @@ public class IngestionControlRepository(TimeLensContext context) : IIngestionCon
         var (where, parameters) = BuildWhere(("job_id", jobId), ("schedule_id", scheduleId), ("series_id", seriesId));
         var sql = $"""
             SELECT id, job_id, schedule_id, series_id, status, created_at, started_at, finished_at, inserted, skipped, error
-            FROM ingestion_executions
+            FROM ingestion.ingestion_executions
             {where}
             ORDER BY created_at DESC
             LIMIT 500
@@ -107,7 +107,7 @@ public class IngestionControlRepository(TimeLensContext context) : IIngestionCon
         foreach (var schedule in schedules)
         {
             await using var command = context.Postgres.CreateCommand("""
-                INSERT INTO ingestion_schedules (
+                INSERT INTO ingestion.ingestion_schedules (
                     id, series_id, name, cron_expression, default_cron_expression, enabled, source, endpoint, parameters,
                     lookback_hours, window_start_expression, window_end_expression, default_window_start_expression,
                     default_window_end_expression, batch_size, last_queued_at, created_at, updated_at)
@@ -118,15 +118,15 @@ public class IngestionControlRepository(TimeLensContext context) : IIngestionCon
                 ON CONFLICT (id) DO UPDATE SET
                     series_id = EXCLUDED.series_id,
                     name = EXCLUDED.name,
-                    cron_expression = CASE WHEN ingestion_schedules.cron_expression = '* * * * *' THEN EXCLUDED.cron_expression ELSE ingestion_schedules.cron_expression END,
+                    cron_expression = CASE WHEN ingestion.ingestion_schedules.cron_expression = '* * * * *' THEN EXCLUDED.cron_expression ELSE ingestion.ingestion_schedules.cron_expression END,
                     default_cron_expression = EXCLUDED.default_cron_expression,
                     source = EXCLUDED.source,
                     endpoint = EXCLUDED.endpoint,
                     parameters = EXCLUDED.parameters,
-                    lookback_hours = CASE WHEN ingestion_schedules.cron_expression = '* * * * *' THEN EXCLUDED.lookback_hours ELSE ingestion_schedules.lookback_hours END,
+                    lookback_hours = CASE WHEN ingestion.ingestion_schedules.cron_expression = '* * * * *' THEN EXCLUDED.lookback_hours ELSE ingestion.ingestion_schedules.lookback_hours END,
                     default_window_start_expression = EXCLUDED.default_window_start_expression,
                     default_window_end_expression = EXCLUDED.default_window_end_expression,
-                    batch_size = CASE WHEN ingestion_schedules.cron_expression = '* * * * *' THEN EXCLUDED.batch_size ELSE ingestion_schedules.batch_size END,
+                    batch_size = CASE WHEN ingestion.ingestion_schedules.cron_expression = '* * * * *' THEN EXCLUDED.batch_size ELSE ingestion.ingestion_schedules.batch_size END,
                     updated_at = EXCLUDED.updated_at
                 """);
             AddScheduleParameters(command, schedule);
@@ -152,7 +152,7 @@ public class IngestionControlRepository(TimeLensContext context) : IIngestionCon
         schedule.UpdatedAt = now;
 
         await using var command = context.Postgres.CreateCommand("""
-            INSERT INTO ingestion_schedules (
+            INSERT INTO ingestion.ingestion_schedules (
                 id, series_id, name, cron_expression, default_cron_expression, enabled, source, endpoint, parameters,
                 lookback_hours, window_start_expression, window_end_expression, default_window_start_expression,
                 default_window_end_expression, batch_size, last_queued_at, created_at, updated_at)
@@ -171,7 +171,7 @@ public class IngestionControlRepository(TimeLensContext context) : IIngestionCon
     {
         var now = DateTimeOffset.UtcNow;
         await ExecuteAsync("""
-            UPDATE ingestion_schedules
+            UPDATE ingestion.ingestion_schedules
             SET cron_expression = @cron_expression,
                 enabled = @enabled,
                 window_start_expression = @window_start_expression,
@@ -195,7 +195,7 @@ public class IngestionControlRepository(TimeLensContext context) : IIngestionCon
     {
         var now = DateTimeOffset.UtcNow;
         await ExecuteAsync("""
-            UPDATE ingestion_schedules
+            UPDATE ingestion.ingestion_schedules
             SET cron_expression = NULLIF(default_cron_expression, ''),
                 window_start_expression = default_window_start_expression,
                 window_end_expression = default_window_end_expression,
@@ -217,7 +217,7 @@ public class IngestionControlRepository(TimeLensContext context) : IIngestionCon
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
 
         await using var reserve = new NpgsqlCommand("""
-            UPDATE ingestion_schedules
+            UPDATE ingestion.ingestion_schedules
             SET last_queued_at = @queued_at, updated_at = @queued_at
             WHERE id = @id AND last_queued_at IS NOT DISTINCT FROM @last_queued_at
             """, connection, transaction);
@@ -341,7 +341,7 @@ public class IngestionControlRepository(TimeLensContext context) : IIngestionCon
         {
             command.Transaction = transaction;
             command.CommandText = """
-                INSERT INTO ingestion_jobs (id, schedule_id, series_id, status, queued_at, started_at, finished_at, error)
+                INSERT INTO ingestion.ingestion_jobs (id, schedule_id, series_id, status, queued_at, started_at, finished_at, error)
                 VALUES (@id, @schedule_id, @series_id, @status, @queued_at, NULL, NULL, '')
                 ON CONFLICT (id) DO NOTHING
                 """;
@@ -393,8 +393,8 @@ public class IngestionControlRepository(TimeLensContext context) : IIngestionCon
     {
         var now = DateTimeOffset.UtcNow;
         await ExecuteAsync("""
-            UPDATE ingestion_jobs SET status = @status, started_at = @now WHERE id = @job_id;
-            UPDATE ingestion_executions SET status = @status, started_at = @now WHERE id = @execution_id;
+            UPDATE ingestion.ingestion_jobs SET status = @status, started_at = @now WHERE id = @job_id;
+            UPDATE ingestion.ingestion_executions SET status = @status, started_at = @now WHERE id = @execution_id;
             """, cancellationToken, ("status", IngestionStatuses.Running), ("now", now), ("job_id", jobId), ("execution_id", executionId));
     }
 
@@ -407,7 +407,7 @@ public class IngestionControlRepository(TimeLensContext context) : IIngestionCon
         var now = DateTimeOffset.UtcNow;
         await ExecuteAsync("""
             WITH updated_execution AS (
-                UPDATE ingestion_executions
+                UPDATE ingestion.ingestion_executions
                 SET artifacts_expected = GREATEST(artifacts_expected, @artifact_count),
                     status = CASE
                         WHEN status = @failed THEN status
@@ -422,7 +422,7 @@ public class IngestionControlRepository(TimeLensContext context) : IIngestionCon
                 WHERE id = @execution_id
                 RETURNING job_id, status, finished_at
             )
-            UPDATE ingestion_jobs AS job
+            UPDATE ingestion.ingestion_jobs AS job
             SET status = updated_execution.status, finished_at = updated_execution.finished_at
             FROM updated_execution
             WHERE job.id = updated_execution.job_id AND job.id = @job_id AND job.status <> @failed;
@@ -440,8 +440,8 @@ public class IngestionControlRepository(TimeLensContext context) : IIngestionCon
     {
         var now = DateTimeOffset.UtcNow;
         await ExecuteAsync("""
-            UPDATE ingestion_jobs SET status = @status, finished_at = @now, error = @error WHERE id = @job_id;
-            UPDATE ingestion_executions SET status = @status, finished_at = @now, error = @error WHERE id = @execution_id;
+            UPDATE ingestion.ingestion_jobs SET status = @status, finished_at = @now, error = @error WHERE id = @job_id;
+            UPDATE ingestion.ingestion_executions SET status = @status, finished_at = @now, error = @error WHERE id = @execution_id;
             """, cancellationToken, ("status", IngestionStatuses.Failed), ("now", now), ("error", error), ("job_id", jobId), ("execution_id", executionId));
     }
 
@@ -452,7 +452,7 @@ public class IngestionControlRepository(TimeLensContext context) : IIngestionCon
                    lookback_hours, batch_size, last_queued_at, created_at, updated_at,
                    default_cron_expression, window_start_expression, window_end_expression,
                    default_window_start_expression, default_window_end_expression
-            FROM ingestion_schedules
+            FROM ingestion.ingestion_schedules
             {suffix}
             """;
 
@@ -535,7 +535,7 @@ public class IngestionControlRepository(TimeLensContext context) : IIngestionCon
         await using var command = context.Postgres.CreateCommand("""
             SELECT EXISTS (
                 SELECT 1
-                FROM market_data_series
+                FROM market_data.market_data_series
                 WHERE series_id = @series_id
                   AND provider = @source
                   AND endpoint = @endpoint
@@ -554,7 +554,7 @@ public class IngestionControlRepository(TimeLensContext context) : IIngestionCon
     private static async Task InsertJobAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, IngestionJob job, CancellationToken cancellationToken)
     {
         await using var command = new NpgsqlCommand("""
-            INSERT INTO ingestion_jobs (id, schedule_id, series_id, status, queued_at, started_at, finished_at, error)
+            INSERT INTO ingestion.ingestion_jobs (id, schedule_id, series_id, status, queued_at, started_at, finished_at, error)
             VALUES (@id, @schedule_id, @series_id, @status, @queued_at, @started_at, @finished_at, @error)
             """, connection, transaction);
         command.Parameters.AddWithValue("id", job.Id);
@@ -571,7 +571,7 @@ public class IngestionControlRepository(TimeLensContext context) : IIngestionCon
     private static async Task InsertExecutionAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, IngestionExecution execution, CancellationToken cancellationToken)
     {
         await using var command = new NpgsqlCommand("""
-            INSERT INTO ingestion_executions (id, job_id, schedule_id, series_id, status, created_at, started_at, finished_at, inserted, skipped, error)
+            INSERT INTO ingestion.ingestion_executions (id, job_id, schedule_id, series_id, status, created_at, started_at, finished_at, inserted, skipped, error)
             VALUES (@id, @job_id, @schedule_id, @series_id, @status, @created_at, @started_at, @finished_at, @inserted, @skipped, @error)
             """, connection, transaction);
         command.Parameters.AddWithValue("id", execution.Id);

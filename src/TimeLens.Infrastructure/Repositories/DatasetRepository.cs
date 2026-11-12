@@ -28,7 +28,7 @@ public class DatasetRepository(TimeLensContext context) : IDatasetRepository
         metadata.LastIngestedAt = now;
 
         await using var command = context.Postgres.CreateCommand("""
-            INSERT INTO market_data_series (
+            INSERT INTO market_data.market_data_series (
                 definition_id, series_id, provider_series_id, provider, exchange, symbol, asset_class, base_asset, quote_asset,
                 market_data_type, timeframe, currency, time_zone, provider_instrument_id, endpoint,
                 unit, calendar, license_info, deprecated, request_parameters, provider_metadata,
@@ -59,8 +59,8 @@ public class DatasetRepository(TimeLensContext context) : IDatasetRepository
                 deprecated = EXCLUDED.deprecated,
                 request_parameters = EXCLUDED.request_parameters,
                 provider_metadata = EXCLUDED.provider_metadata,
-                first_available_at = LEAST(market_data_series.first_available_at, EXCLUDED.first_available_at),
-                last_available_at = GREATEST(market_data_series.last_available_at, EXCLUDED.last_available_at),
+                first_available_at = LEAST(market_data.market_data_series.first_available_at, EXCLUDED.first_available_at),
+                last_available_at = GREATEST(market_data.market_data_series.last_available_at, EXCLUDED.last_available_at),
                 last_ingested_at = EXCLUDED.last_ingested_at
             """);
         AddParameters(command, metadata);
@@ -142,7 +142,7 @@ public class DatasetRepository(TimeLensContext context) : IDatasetRepository
     public async Task<DatasetMetadataDto?> SetDeprecatedAsync(long seriesId, bool deprecated, CancellationToken cancellationToken = default)
     {
         await using var command = context.Postgres.CreateCommand("""
-            UPDATE market_data_series
+            UPDATE market_data.market_data_series
             SET deprecated = @deprecated
             WHERE series_id = @series_id
             """);
@@ -158,7 +158,7 @@ public class DatasetRepository(TimeLensContext context) : IDatasetRepository
                market_data_type, timeframe, currency, time_zone, provider_instrument_id, endpoint,
                unit, calendar, license_info, deprecated, request_parameters::text, provider_metadata::text,
                user_metadata::text, first_available_at, last_available_at, first_observed_at, last_ingested_at
-        FROM market_data_series
+        FROM market_data.market_data_series
         """;
 
     private static void AddFilter(NpgsqlCommand command, List<string> clauses, string column, string? value)

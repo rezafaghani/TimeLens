@@ -125,22 +125,15 @@ public class TimeSeriesRepository(TimeLensContext context, IMarketDataUpdatePubl
         command.CommandText = $$"""
             SELECT timestamp, open, high, low, close, volume, as_of
             FROM (
-                SELECT
-                    timestamp,
-                    open,
-                    high,
-                    low,
-                    close,
-                    volume,
-                    as_of,
-                    row_number() OVER (PARTITION BY series_id, timestamp ORDER BY as_of DESC, inserted_at DESC) AS rn
+                SELECT timestamp, open, high, low, close, volume, as_of
                 FROM {{BarsTable}}
                 WHERE series_id = {seriesId:Int64}
                   AND timestamp >= {start:DateTime64(3)}
                   AND timestamp < {end:DateTime64(3)}
                   {{(asOf.HasValue ? "AND as_of <= {asOf:DateTime64(3)}" : "")}}
+                ORDER BY timestamp, as_of DESC, inserted_at DESC
+                LIMIT 1 BY timestamp
             )
-            WHERE rn = 1
             ORDER BY timestamp
             {{(limit.HasValue ? "LIMIT {limit:Int32}" : "")}}
             """;

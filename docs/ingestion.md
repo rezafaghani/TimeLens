@@ -60,6 +60,8 @@ Use the numeric ID in dataset, ingestion, quality, and analytics API requests. F
 
 ## Existing database migration
 
-On startup, the API and Inserter ensure the PostgreSQL and ClickHouse schemas and migrate legacy string series IDs. PostgreSQL retains the old metadata identifier as `definition_id`; old ClickHouse rows are copied to the numeric-ID table, and the previous table is retained as `market_ohlcv_bars_legacy`.
+On startup, the API and Inserter ensure the PostgreSQL and ClickHouse schemas and migrate legacy tables from `public`. PostgreSQL tables are grouped under `market_data`, `ingestion`, `execution`, and `quality`; the unused historical `quality_validator_executions` table is moved to `legacy` instead of being deleted. Legacy string series IDs are migrated to canonical numeric IDs, with old metadata identifiers retained as `definition_id`.
 
-Back up PostgreSQL and ClickHouse before deploying this migration to an existing environment. Migration stops with an error if existing identifiers cannot be mapped to the canonical registry; resolve the unmapped data rather than assigning IDs differently between environments.
+The ClickHouse connection selects the `timelens` database (configurable with `CLICKHOUSE_DB`). `market_ohlcv_bars` uses `MergeTree` with sort key `(series_id, timestamp, as_of)`, matching the application's series-and-time-range reads while preserving version history. Reads select the latest eligible version per timestamp with `LIMIT 1 BY`, avoiding a full window-function rank.
+
+Old ClickHouse rows are copied to the numeric-ID table, and the previous table is retained as `market_ohlcv_bars_legacy`. Back up PostgreSQL and ClickHouse before deploying these migrations to an existing environment. Migration stops with an error if existing identifiers cannot be mapped to the canonical registry; resolve the unmapped data rather than assigning IDs differently between environments.

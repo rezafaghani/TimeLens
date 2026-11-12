@@ -101,7 +101,7 @@ public class RabbitMqMarketDataUpdatePublisher(TimeLensContext context, IOptions
     {
         await using var command = context.Postgres.CreateCommand("""
             SELECT series_id, provider_series_id, provider, exchange, symbol, market_data_type, timeframe, provider_instrument_id
-            FROM market_data_series
+            FROM market_data.market_data_series
             WHERE series_id = @series_id
             """);
         command.Parameters.AddWithValue("series_id", seriesId);

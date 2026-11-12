@@ -24,7 +24,7 @@ public class IngestionArtifactRepository(TimeLensContext context)
         var now = DateTimeOffset.UtcNow;
 
         await using (var insert = new NpgsqlCommand("""
-            INSERT INTO ingestion_artifacts (
+            INSERT INTO ingestion.ingestion_artifacts (
                 id, job_id, execution_id, series_id, provider_series_id, ingested_at, raw_object_key,
                 parsed_object_key, parsed_sha256, source_metadata_version, point_count, artifact_count, status, created_at)
             VALUES (
@@ -44,7 +44,7 @@ public class IngestionArtifactRepository(TimeLensContext context)
             SELECT status, job_id, execution_id, series_id, provider_series_id, parsed_sha256, point_count, artifact_count, attempts,
                    (ingested_at = @ingested_at) AS ingested_at_matches,
                    raw_object_key, parsed_object_key, source_metadata_version
-            FROM ingestion_artifacts
+            FROM ingestion.ingestion_artifacts
             WHERE id = @id
             FOR UPDATE
             """, connection, transaction))
@@ -77,7 +77,7 @@ public class IngestionArtifactRepository(TimeLensContext context)
         }
 
         await using (var updateExecution = new NpgsqlCommand("""
-            UPDATE ingestion_executions
+            UPDATE ingestion.ingestion_executions
             SET artifacts_expected = GREATEST(artifacts_expected, @artifact_count)
             WHERE id = @execution_id
             """, connection, transaction))
@@ -94,7 +94,7 @@ public class IngestionArtifactRepository(TimeLensContext context)
         }
 
         await using (var update = new NpgsqlCommand("""
-            UPDATE ingestion_artifacts
+            UPDATE ingestion.ingestion_artifacts
             SET status = 'processing', attempts = attempts + 1, error = '',
                 started_at = COALESCE(started_at, @now), finished_at = NULL
             WHERE id = @id
@@ -106,7 +106,7 @@ public class IngestionArtifactRepository(TimeLensContext context)
         }
 
         await using (var insertHash = new NpgsqlCommand("""
-            INSERT INTO ingestion_artifact_hashes (series_id, parsed_sha256, ingestion_id, status, updated_at)
+            INSERT INTO ingestion.ingestion_artifact_hashes (series_id, parsed_sha256, ingestion_id, status, updated_at)
             VALUES (@series_id, @parsed_sha256, @id, 'processing', @now)
             ON CONFLICT (series_id, parsed_sha256) DO NOTHING
             """, connection, transaction))
@@ -122,7 +122,7 @@ public class IngestionArtifactRepository(TimeLensContext context)
         string hashStatus;
         await using (var selectHash = new NpgsqlCommand("""
             SELECT ingestion_id, status
-            FROM ingestion_artifact_hashes
+            FROM ingestion.ingestion_artifact_hashes
             WHERE series_id = @series_id AND parsed_sha256 = @parsed_sha256
             FOR UPDATE
             """, connection, transaction))
@@ -161,7 +161,7 @@ public class IngestionArtifactRepository(TimeLensContext context)
         }
 
         await using (var takeOver = new NpgsqlCommand("""
-            UPDATE ingestion_artifact_hashes
+            UPDATE ingestion.ingestion_artifact_hashes
             SET ingestion_id = @id, status = 'processing', updated_at = @now
             WHERE series_id = @series_id AND parsed_sha256 = @parsed_sha256
             """, connection, transaction))
@@ -188,7 +188,7 @@ public class IngestionArtifactRepository(TimeLensContext context)
         string? executionId = null;
 
         await using (var update = new NpgsqlCommand("""
-            UPDATE ingestion_artifacts
+            UPDATE ingestion.ingestion_artifacts
             SET status = 'inserted', inserted_count = @inserted, skipped_count = @skipped,
                 error = '', finished_at = @finished_at
             WHERE id = @id AND status = 'processing'
@@ -205,7 +205,7 @@ public class IngestionArtifactRepository(TimeLensContext context)
         if (executionId is not null)
         {
             await using (var updateHash = new NpgsqlCommand("""
-                UPDATE ingestion_artifact_hashes
+                UPDATE ingestion.ingestion_artifact_hashes
                 SET status = 'inserted', updated_at = @updated_at
                 WHERE series_id = @series_id AND parsed_sha256 = @parsed_sha256 AND ingestion_id = @id
                 """, connection, transaction))
@@ -234,7 +234,7 @@ public class IngestionArtifactRepository(TimeLensContext context)
         string? parsedHash = null;
 
         await using (var update = new NpgsqlCommand("""
-            UPDATE ingestion_artifacts
+            UPDATE ingestion.ingestion_artifacts
             SET status = 'failed', error = @error, finished_at = @finished_at
             WHERE id = @id AND status = 'processing'
             RETURNING series_id, parsed_sha256
@@ -254,7 +254,7 @@ public class IngestionArtifactRepository(TimeLensContext context)
         if (seriesId is not null && parsedHash is not null)
         {
             await using var updateHash = new NpgsqlCommand("""
-                UPDATE ingestion_artifact_hashes
+                UPDATE ingestion.ingestion_artifact_hashes
                 SET status = 'failed', updated_at = @updated_at
                 WHERE series_id = @series_id AND parsed_sha256 = @parsed_sha256 AND ingestion_id = @id
                 """, connection, transaction);
@@ -278,7 +278,7 @@ public class IngestionArtifactRepository(TimeLensContext context)
     {
         string? executionId;
         await using (var update = new NpgsqlCommand("""
-            UPDATE ingestion_artifacts
+            UPDATE ingestion.ingestion_artifacts
             SET status = 'duplicate', duplicate_of = @duplicate_of, skipped_count = point_count,
                 finished_at = @finished_at
             WHERE id = @id
@@ -306,7 +306,7 @@ public class IngestionArtifactRepository(TimeLensContext context)
         CancellationToken cancellationToken)
     {
         await using var update = new NpgsqlCommand("""
-            UPDATE ingestion_executions
+            UPDATE ingestion.ingestion_executions
             SET inserted = inserted + @inserted,
                 skipped = skipped + @skipped,
                 artifacts_completed = artifacts_completed + 1,
@@ -333,7 +333,7 @@ public class IngestionArtifactRepository(TimeLensContext context)
             var jobId = reader.GetString(0);
             await reader.DisposeAsync();
             await using var updateJob = new NpgsqlCommand("""
-                UPDATE ingestion_jobs
+                UPDATE ingestion.ingestion_jobs
                 SET status = 'completed', finished_at = @finished_at
                 WHERE id = @job_id AND status <> 'failed'
                 """, connection, transaction);
@@ -351,7 +351,7 @@ public class IngestionArtifactRepository(TimeLensContext context)
         CancellationToken cancellationToken)
     {
         await using var update = new NpgsqlCommand("""
-            UPDATE ingestion_artifact_hashes
+            UPDATE ingestion.ingestion_artifact_hashes
             SET status = 'processing', updated_at = @now
             WHERE series_id = @series_id AND parsed_sha256 = @parsed_sha256 AND ingestion_id = @id
             """, connection, transaction);
