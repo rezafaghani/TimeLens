@@ -8,6 +8,7 @@ import {
   type IChartApi,
   type ISeriesApi,
   type MouseEventParams,
+  type Time,
   type UTCTimestamp
 } from 'lightweight-charts';
 import { formatMarketTime, formatTooltipTime } from './marketTime';
@@ -60,10 +61,10 @@ export function MarketChart({ points, mode, currency, timeZone, liveEnabled, liv
         borderColor: '#d8dee8',
         timeVisible: true,
         secondsVisible: false,
-        tickMarkFormatter: time => formatMarketTime(Number(time) * 1000, timeZone, spanMs)
+        tickMarkFormatter: (time: Time) => formatMarketTime(Number(time) * 1000, timeZone, spanMs)
       },
       localization: {
-        priceFormatter: value => `${formatNumber(value)}${currency ? ` ${currency}` : ''}`
+        priceFormatter: (value: number) => `${formatNumber(value)}${currency ? ` ${currency}` : ''}`
       },
       crosshair: {
         mode: 1
@@ -121,10 +122,10 @@ export function MarketChart({ points, mode, currency, timeZone, liveEnabled, liv
 
     chart.applyOptions({
       timeScale: {
-        tickMarkFormatter: time => formatMarketTime(Number(time) * 1000, timeZone, spanMs)
+        tickMarkFormatter: (time: Time) => formatMarketTime(Number(time) * 1000, timeZone, spanMs)
       },
       localization: {
-        priceFormatter: value => `${formatNumber(value)}${currency ? ` ${currency}` : ''}`
+        priceFormatter: (value: number) => `${formatNumber(value)}${currency ? ` ${currency}` : ''}`
       }
     });
 
