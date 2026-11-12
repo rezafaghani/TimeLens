@@ -1,0 +1,20 @@
+<Solution>
+  <Configurations>
+    <Platform Name="Any CPU" />
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Folder Name="/src/">
+    <Project Path="src/TimeLens.API/TimeLens.API.csproj" />
+    <Project Path="src/TimeLens.Domain/TimeLens.Domain.csproj" />
+    <Project Path="src/TimeLens.Infrastructure/TimeLens.Infrastructure.csproj" />
+    <Project Path="src/TimeLens.Ingestion/TimeLens.Ingestion.csproj" />
+    <Project Path="src/TimeLens.Insert/TimeLens.Insert.csproj" />
+    <Project Path="src/TimeLens.Scheduler/TimeLens.Scheduler.csproj" />
+    <Project Path="src/TimeLens.Validation.Worker/TimeLens.Validation.Worker.csproj" />
+    <Project Path="src/TimeLens.Validation/TimeLens.Validation.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/TimeLens.UnitTest/TimeLens.UnitTest.csproj" />
+  </Folder>
+</Solution>

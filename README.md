@@ -102,9 +102,9 @@ The Kubernetes manifest at `deploy/k8s/seaweedfs.yaml` provisions SeaweedFS only
 The solution targets .NET 11. For the API to run locally, configure PostgreSQL, ClickHouse, and RabbitMQ using the `ConnectionStrings__*` and `RabbitMq__*` environment variables. Run the full stack with Compose for a ready-to-use local setup.
 
 ```bash
-dotnet restore TimeLens.sln
-dotnet build TimeLens.sln
-dotnet test TimeLens.sln
+dotnet restore TimeLens.slnx
+dotnet build TimeLens.slnx
+dotnet test TimeLens.slnx
 ```
 
 ```bash
