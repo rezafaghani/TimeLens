@@ -86,12 +86,12 @@ public class Worker(
                 activity?.SetTag("market.series_id", message.SeriesId);
                 if (message.Source == "coinbase-exchange")
                 {
-                    var grain = grainFactory.GetGrain<ICoinbaseCandleGrain>(message.SeriesId);
+                    var grain = grainFactory.GetGrain<ICoinbaseCandleGrain>(message.SeriesId.ToString(System.Globalization.CultureInfo.InvariantCulture));
                     await grain.IngestAsync(json, stoppingToken);
                 }
                 else if (message.Source is "energy-charts" or "coin-metrics-community")
                 {
-                    var grain = grainFactory.GetGrain<IEnergyChartsPriceGrain>(message.SeriesId);
+                    var grain = grainFactory.GetGrain<IEnergyChartsPriceGrain>(message.SeriesId.ToString(System.Globalization.CultureInfo.InvariantCulture));
                     await grain.IngestAsync(json, stoppingToken);
                 }
                 else

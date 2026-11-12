@@ -13,7 +13,7 @@ public class CoinMetricsNormalizer
         var frequency = Parameter(definition, "frequency", "1d");
         var metadata = new DatasetMetadataDto
         {
-            SeriesId = $"coinmetrics:{asset}:{metric}:{frequency}".ToLowerInvariant(),
+            ProviderSeriesId = $"coinmetrics:{asset}:{metric}:{frequency}".ToLowerInvariant(),
             Provider = "coin-metrics-community",
             Exchange = "Bitcoin network",
             Symbol = $"{asset.ToUpperInvariant()}-{metric}",

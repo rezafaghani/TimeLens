@@ -3,7 +3,7 @@ namespace TimeLens.Domain.Models;
 public class DatasetSearchFilter
 {
     public string? Search { get; set; }
-    public string? SeriesId { get; set; }
+    public long? SeriesId { get; set; }
     public string? Provider { get; set; }
     public string? Exchange { get; set; }
     public string? Symbol { get; set; }

@@ -16,7 +16,7 @@ public class CoinbaseCandleNormalizer
 
         var metadata = new DatasetMetadataDto
         {
-            SeriesId = $"coinbase:{productId}:{timeframe}".ToLowerInvariant(),
+            ProviderSeriesId = $"coinbase:{productId}:{timeframe}".ToLowerInvariant(),
             Provider = "coinbase-exchange",
             Exchange = "Coinbase",
             Symbol = productId,

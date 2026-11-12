@@ -11,7 +11,7 @@ public class DatasetsControllerTests
     public async Task Series_RejectsEmptyRange()
     {
         var result = await new DatasetsController(Mock.Of<IDatasetRepository>(), Mock.Of<ITimeSeriesRepository>())
-            .Series("dataset-1", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z", null, null, null, CancellationToken.None);
+            .Series(1, "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z", null, null, null, CancellationToken.None);
 
         Assert.IsType<BadRequestObjectResult>(result);
     }
@@ -20,7 +20,7 @@ public class DatasetsControllerTests
     public async Task Series_RejectsInvalidLimit()
     {
         var result = await new DatasetsController(Mock.Of<IDatasetRepository>(), Mock.Of<ITimeSeriesRepository>())
-            .Series("dataset-1", "2026-01-01T00:00:00Z", "2026-01-01T01:00:00Z", null, null, 10001, CancellationToken.None);
+            .Series(1, "2026-01-01T00:00:00Z", "2026-01-01T01:00:00Z", null, null, 10001, CancellationToken.None);
 
         Assert.IsType<BadRequestObjectResult>(result);
     }
@@ -30,11 +30,11 @@ public class DatasetsControllerTests
     {
         var repository = new Mock<IDatasetRepository>();
         var cancellationToken = CancellationToken.None;
-        repository.Setup(x => x.SetDeprecatedAsync("dataset-1", true, cancellationToken))
-            .ReturnsAsync(new DatasetMetadataDto { Id = "dataset-1", Deprecated = true });
+        repository.Setup(x => x.SetDeprecatedAsync(1, true, cancellationToken))
+            .ReturnsAsync(new DatasetMetadataDto { SeriesId = 1, Deprecated = true });
 
         var result = await new DatasetsController(repository.Object, Mock.Of<ITimeSeriesRepository>())
-            .SetDeprecated("dataset-1", new SetDatasetDeprecatedRequest(true), cancellationToken);
+            .SetDeprecated(1, new SetDatasetDeprecatedRequest(true), cancellationToken);
 
         var ok = Assert.IsType<OkObjectResult>(result);
         Assert.True(Assert.IsType<DatasetMetadataDto>(ok.Value).Deprecated);

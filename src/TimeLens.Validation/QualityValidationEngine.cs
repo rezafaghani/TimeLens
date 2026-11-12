@@ -11,7 +11,7 @@ public static class QualityValidationEngine
         Validate(request);
         var context = new ExecutionPluginContext(
             "dataset",
-            request.Metadata.Id,
+            request.Metadata.SeriesId.ToString(System.Globalization.CultureInfo.InvariantCulture),
             request.Start,
             request.End,
             JsonSerializer.SerializeToElement(new

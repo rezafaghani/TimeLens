@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text;
 using TimeLens.Ingestion.Services;
 
 namespace TimeLens.UnitTest.Services;
@@ -15,7 +16,7 @@ public class CoinMetricsClientTests
             return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{\"data\":[]}") };
         })) { BaseAddress = new Uri("https://community-api.coinmetrics.io/v4/") };
 
-        using var result = await new CoinMetricsClient(httpClient).GetAsync(
+        var result = await new CoinMetricsClient(httpClient).GetAsync(
             "btc",
             "HashRate",
             "1d",
@@ -24,6 +25,7 @@ public class CoinMetricsClientTests
             CancellationToken.None);
 
         Assert.Contains("start_time=2026-08-20&end_time=2026-09-19", requestedUri!.Query);
+        Assert.Equal("{\"data\":[]}", Encoding.UTF8.GetString(result.RawJson));
     }
 
     private sealed class StubHandler(Func<HttpRequestMessage, HttpResponseMessage> send) : HttpMessageHandler

@@ -180,7 +180,8 @@ public class Worker(
         foreach (var target in job.Targets.Where(target =>
                      target.TargetType.Equals("series", StringComparison.OrdinalIgnoreCase)))
         {
-            var executions = await ingestionRepository.GetExecutionsAsync(null, null, target.TargetId, cancellationToken);
+            var seriesId = long.Parse(target.TargetId, System.Globalization.CultureInfo.InvariantCulture);
+            var executions = await ingestionRepository.GetExecutionsAsync(null, null, seriesId, cancellationToken);
             if (DefaultQualityValidationJobs.HasIngestedData(executions))
             {
                 return true;

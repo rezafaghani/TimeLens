@@ -12,14 +12,14 @@ public class IngestionControlRepository(TimeLensContext context) : IIngestionCon
         return await QuerySchedulesAsync("WHERE enabled = true", [], cancellationToken);
     }
 
-    public async Task<List<IngestionSchedule>> GetSchedulesAsync(string? seriesId = null, CancellationToken cancellationToken = default)
+    public async Task<List<IngestionSchedule>> GetSchedulesAsync(long? seriesId = null, CancellationToken cancellationToken = default)
     {
         var parameters = new List<NpgsqlParameter>();
         var where = "";
-        if (!string.IsNullOrWhiteSpace(seriesId))
+        if (seriesId.HasValue)
         {
             where = "WHERE series_id = @series_id";
-            parameters.Add(new NpgsqlParameter("series_id", seriesId));
+            parameters.Add(new NpgsqlParameter("series_id", seriesId.Value));
         }
 
         return await QuerySchedulesAsync($"{where} ORDER BY series_id", parameters, cancellationToken);
@@ -31,7 +31,7 @@ public class IngestionControlRepository(TimeLensContext context) : IIngestionCon
         return schedules.FirstOrDefault();
     }
 
-    public async Task<List<IngestionJob>> GetJobsAsync(string? scheduleId, string? seriesId, CancellationToken cancellationToken = default)
+    public async Task<List<IngestionJob>> GetJobsAsync(string? scheduleId, long? seriesId, CancellationToken cancellationToken = default)
     {
         var (where, parameters) = BuildWhere(("schedule_id", scheduleId), ("series_id", seriesId));
         var sql = $"""
@@ -53,7 +53,7 @@ public class IngestionControlRepository(TimeLensContext context) : IIngestionCon
             {
                 Id = reader.GetString(0),
                 ScheduleId = reader.GetString(1),
-                SeriesId = reader.GetString(2),
+                SeriesId = reader.GetInt64(2),
                 Status = reader.GetString(3),
                 QueuedAt = reader.GetFieldValue<DateTimeOffset>(4),
                 StartedAt = reader.IsDBNull(5) ? null : reader.GetFieldValue<DateTimeOffset>(5),
@@ -65,7 +65,7 @@ public class IngestionControlRepository(TimeLensContext context) : IIngestionCon
         return jobs;
     }
 
-    public async Task<List<IngestionExecution>> GetExecutionsAsync(string? jobId, string? scheduleId, string? seriesId, CancellationToken cancellationToken = default)
+    public async Task<List<IngestionExecution>> GetExecutionsAsync(string? jobId, string? scheduleId, long? seriesId, CancellationToken cancellationToken = default)
     {
         var (where, parameters) = BuildWhere(("job_id", jobId), ("schedule_id", scheduleId), ("series_id", seriesId));
         var sql = $"""
@@ -88,7 +88,7 @@ public class IngestionControlRepository(TimeLensContext context) : IIngestionCon
                 Id = reader.GetString(0),
                 JobId = reader.GetString(1),
                 ScheduleId = reader.GetString(2),
-                SeriesId = reader.GetString(3),
+                SeriesId = reader.GetInt64(3),
                 Status = reader.GetString(4),
                 CreatedAt = reader.GetFieldValue<DateTimeOffset>(5),
                 StartedAt = reader.IsDBNull(6) ? null : reader.GetFieldValue<DateTimeOffset>(6),
@@ -136,6 +136,13 @@ public class IngestionControlRepository(TimeLensContext context) : IIngestionCon
 
     public async Task<IngestionSchedule> CreateScheduleAsync(IngestionSchedule schedule, CancellationToken cancellationToken = default)
     {
+        var definition = CanonicalSeriesRegistry.ResolveSchedule(schedule.Source, schedule.Parameters);
+        if (definition.SeriesId != schedule.SeriesId)
+        {
+            throw new InvalidOperationException(
+                $"Schedule parameters resolve to canonical series ID {definition.SeriesId}, not {schedule.SeriesId}.");
+        }
+
         var now = DateTimeOffset.UtcNow;
         schedule.Id = string.IsNullOrWhiteSpace(schedule.Id) ? Guid.NewGuid().ToString("N") : schedule.Id;
         schedule.DefaultCronExpression = string.IsNullOrWhiteSpace(schedule.DefaultCronExpression) ? schedule.CronExpression : schedule.DefaultCronExpression;
@@ -391,15 +398,42 @@ public class IngestionControlRepository(TimeLensContext context) : IIngestionCon
             """, cancellationToken, ("status", IngestionStatuses.Running), ("now", now), ("job_id", jobId), ("execution_id", executionId));
     }
 
-    public async Task MarkJobCompletedAsync(string jobId, string executionId, int inserted, int skipped, CancellationToken cancellationToken = default)
+    public async Task MarkJobArtifactsQueuedAsync(
+        string jobId,
+        string executionId,
+        int artifactCount,
+        CancellationToken cancellationToken = default)
     {
         var now = DateTimeOffset.UtcNow;
         await ExecuteAsync("""
-            UPDATE ingestion_jobs SET status = @status, finished_at = @now WHERE id = @job_id;
-            UPDATE ingestion_executions
-            SET status = @status, finished_at = @now, inserted = @inserted, skipped = @skipped
-            WHERE id = @execution_id;
-            """, cancellationToken, ("status", IngestionStatuses.Completed), ("now", now), ("job_id", jobId), ("execution_id", executionId), ("inserted", inserted), ("skipped", skipped));
+            WITH updated_execution AS (
+                UPDATE ingestion_executions
+                SET artifacts_expected = GREATEST(artifacts_expected, @artifact_count),
+                    status = CASE
+                        WHEN status = @failed THEN status
+                        WHEN artifacts_completed >= GREATEST(artifacts_expected, @artifact_count) THEN @completed
+                        ELSE @queued
+                    END,
+                    finished_at = CASE
+                        WHEN status = @failed THEN finished_at
+                        WHEN artifacts_completed >= GREATEST(artifacts_expected, @artifact_count) THEN @now
+                        ELSE NULL
+                    END
+                WHERE id = @execution_id
+                RETURNING job_id, status, finished_at
+            )
+            UPDATE ingestion_jobs AS job
+            SET status = updated_execution.status, finished_at = updated_execution.finished_at
+            FROM updated_execution
+            WHERE job.id = updated_execution.job_id AND job.id = @job_id AND job.status <> @failed;
+            """, cancellationToken,
+            ("artifact_count", artifactCount),
+            ("failed", IngestionStatuses.Failed),
+            ("completed", IngestionStatuses.Completed),
+            ("queued", IngestionStatuses.Queued),
+            ("now", now),
+            ("execution_id", executionId),
+            ("job_id", jobId));
     }
 
     public async Task MarkJobFailedAsync(string jobId, string executionId, string error, CancellationToken cancellationToken = default)
@@ -432,7 +466,7 @@ public class IngestionControlRepository(TimeLensContext context) : IIngestionCon
             schedules.Add(new IngestionSchedule
             {
                 Id = reader.GetString(0),
-                SeriesId = reader.GetString(1),
+                SeriesId = reader.GetInt64(1),
                 Name = reader.GetString(2),
                 CronExpression = reader.GetString(3),
                 Enabled = reader.GetBoolean(4),
@@ -455,14 +489,14 @@ public class IngestionControlRepository(TimeLensContext context) : IIngestionCon
         return schedules;
     }
 
-    private static (string Where, List<NpgsqlParameter> Parameters) BuildWhere(params (string Name, string? Value)[] filters)
+    private static (string Where, List<NpgsqlParameter> Parameters) BuildWhere(params (string Name, object? Value)[] filters)
     {
         var clauses = new List<string>();
         var parameters = new List<NpgsqlParameter>();
 
         foreach (var (name, value) in filters)
         {
-            if (string.IsNullOrWhiteSpace(value))
+            if (value is null || value is string text && string.IsNullOrWhiteSpace(text))
             {
                 continue;
             }

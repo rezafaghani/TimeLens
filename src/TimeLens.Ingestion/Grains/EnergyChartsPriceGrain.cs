@@ -15,7 +15,7 @@ public class EnergyChartsPriceGrain(
     CoinMetricsClient coinMetricsClient,
     EnergyChartsPriceNormalizer energyChartsNormalizer,
     CoinMetricsNormalizer coinMetricsNormalizer,
-    IngestionWriteClient insertClient,
+    IngestionArtifactWriter artifactWriter,
     IServiceScopeFactory scopeFactory,
     IOptions<IngestionOptions> options,
     ILogger<EnergyChartsPriceGrain> logger) : Grain, IEnergyChartsPriceGrain
@@ -34,9 +34,6 @@ public class EnergyChartsPriceGrain(
         using var runningScope = scopeFactory.CreateScope();
         await runningScope.ServiceProvider.GetRequiredService<IIngestionControlRepository>()
             .MarkJobRunningAsync(message.JobId, message.ExecutionId, cancellationToken);
-
-        var inserted = 0;
-        var skipped = 0;
 
         try
         {
@@ -61,10 +58,12 @@ public class EnergyChartsPriceGrain(
             providerActivity?.SetTag("market.provider", message.Source);
             providerActivity?.SetTag("market.symbol", symbol);
             providerActivity?.SetTag("market.timeframe", timeframe);
-            using var document = isCoinMetrics
+            var response = isCoinMetrics
                 ? await coinMetricsClient.GetAsync(symbol, Get(message.Parameters, "metric"), timeframe, start, end, cancellationToken)
                 : await energyChartsClient.GetAsync(symbol, start, end, cancellationToken);
             TimeLensTelemetry.ProviderRequestDuration.Record(Stopwatch.GetElapsedTime(providerStarted).TotalSeconds, KeyValuePair.Create<string, object?>("market.provider", message.Source));
+            var rawArtifact = await artifactWriter.SaveRawAsync(message, response.RawJson, 1, cancellationToken);
+            using var document = response.Parse();
 
             NormalizedDataset dataset;
             using (TimeLensTelemetry.ActivitySource.StartActivity("NormalizeMarketData"))
@@ -77,29 +76,21 @@ public class EnergyChartsPriceGrain(
 
             using var metadataScope = scopeFactory.CreateScope();
             var saved = await metadataScope.ServiceProvider.GetRequiredService<IDatasetRepository>().UpsertAsync(dataset.Metadata, cancellationToken);
-            dataset.Batch.DatasetId = saved.Id;
             dataset.Batch.SourceMetadataVersion = saved.LastIngestedAt.ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture);
 
-            foreach (var chunk in dataset.Batch.Points.Chunk(Math.Max(message.BatchSize > 0 ? message.BatchSize : options.Value.BatchSize, 1)))
-            {
-                using var persistActivity = TimeLensTelemetry.ActivitySource.StartActivity("PersistMarketData");
-                var result = await insertClient.InsertBatchAsync(new TimeSeriesBatchRequest
-                {
-                    DatasetId = dataset.Batch.DatasetId,
-                    SourceMetadataVersion = dataset.Batch.SourceMetadataVersion,
-                    Points = chunk.ToList()
-                }, cancellationToken);
-                inserted += result.Inserted;
-                skipped += result.Skipped;
-            }
+            await artifactWriter.SaveParsedAndPublishAsync(
+                rawArtifact,
+                saved.SeriesId,
+                dataset.Batch.SourceMetadataVersion,
+                dataset.Batch.Points,
+                cancellationToken);
 
             using var completedScope = scopeFactory.CreateScope();
             await completedScope.ServiceProvider.GetRequiredService<IIngestionControlRepository>()
-                .MarkJobCompletedAsync(message.JobId, message.ExecutionId, inserted, skipped, cancellationToken);
+                .MarkJobArtifactsQueuedAsync(message.JobId, message.ExecutionId, 1, cancellationToken);
             TimeLensTelemetry.IngestionExecutions.Add(1, KeyValuePair.Create<string, object?>("market.provider", message.Source));
-            TimeLensTelemetry.RecordsIngested.Add(inserted, KeyValuePair.Create<string, object?>("market.provider", message.Source));
             TimeLensTelemetry.IngestionDuration.Record(Stopwatch.GetElapsedTime(started).TotalSeconds, KeyValuePair.Create<string, object?>("market.provider", message.Source));
-            logger.LogInformation("Inserted {Inserted}, skipped {Skipped} for {Provider} {SeriesId} {Timeframe}.", inserted, skipped, saved.Provider, saved.SeriesId, saved.Timeframe);
+            logger.LogInformation("Archived and queued {PointCount} points for {Provider} {SeriesId} {Timeframe}.", dataset.Batch.Points.Count, saved.Provider, saved.SeriesId, saved.Timeframe);
         }
         catch (Exception ex)
         {

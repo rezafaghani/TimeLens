@@ -1,27 +1,16 @@
 using TimeLens.Domain.Interfaces;
 using TimeLens.Domain.Models;
-using TimeLens.Insert.Services;
 using TimeLens.Infrastructure;
+using TimeLens.Infrastructure.Observability;
 using TimeLens.Infrastructure.Repositories;
 using TimeLens.Infrastructure.Services;
-using TimeLens.Infrastructure.Observability;
-using Microsoft.AspNetCore.Authentication.JwtBearer;
-using Microsoft.AspNetCore.Server.Kestrel.Core;
-using Scalar.AspNetCore;
+using TimeLens.Insert;
 
-var builder = WebApplication.CreateBuilder(args);
+var builder = Host.CreateApplicationBuilder(args);
 builder.AddTimeLensObservability("timelens-insert");
-builder.WebHost.ConfigureKestrel(options =>
-{
-    options.ListenAnyIP(8080, listenOptions => listenOptions.Protocols = HttpProtocols.Http1);
-    options.ListenAnyIP(8081, listenOptions => listenOptions.Protocols = HttpProtocols.Http2);
-});
 
-builder.Services.AddControllers();
-builder.Services.AddGrpc();
-builder.Services.AddOpenApi();
-builder.Services.AddHealthChecks();
 builder.Services.Configure<RabbitMqOptions>(builder.Configuration.GetSection("RabbitMq"));
+builder.Services.Configure<ArtifactWorkerOptions>(builder.Configuration.GetSection("ArtifactWorker"));
 builder.Services.AddSingleton<TimeLensContext>(sp =>
 {
     var configuration = sp.GetRequiredService<IConfiguration>();
@@ -29,63 +18,35 @@ builder.Services.AddSingleton<TimeLensContext>(sp =>
     var clickHouse = configuration.GetConnectionString("ClickHouse") ?? throw new InvalidOperationException("ClickHouse connection string is not configured.");
     return new TimeLensContext(postgres, clickHouse);
 });
+builder.Services.AddTimeLensObjectStorage(builder.Configuration);
 builder.Services.AddSingleton<IMarketDataUpdatePublisher, RabbitMqMarketDataUpdatePublisher>();
+builder.Services.AddSingleton<IIngestionArtifactPublisher, RabbitMqIngestionArtifactPublisher>();
 builder.Services.AddScoped<ITimeSeriesRepository, TimeSeriesRepository>();
+builder.Services.AddScoped<IngestionArtifactRepository>();
+builder.Services.AddHostedService<IngestionArtifactWorker>();
 
-var authEnabled = builder.Configuration.GetValue("Auth:Enabled", false);
-if (authEnabled)
+var host = builder.Build();
+await InitializeAsync(host.Services);
+await host.RunAsync();
+
+static async Task InitializeAsync(IServiceProvider services)
 {
-    builder.Services
-        .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-        .AddJwtBearer(options =>
-        {
-            options.Authority = builder.Configuration["Auth:Authority"];
-            options.Audience = builder.Configuration["Auth:Audience"];
-            options.RequireHttpsMetadata = builder.Configuration.GetValue("Auth:RequireHttpsMetadata", true);
-        });
-    builder.Services.AddAuthorization(options =>
+    for (var attempt = 1; attempt <= 12; attempt++)
     {
-        options.AddPolicy("IngestionWrite", policy =>
+        try
         {
-            var scope = builder.Configuration["Auth:WriteScope"] ?? "timelens.insert.write";
-            policy.RequireAuthenticatedUser();
-            policy.RequireAssertion(context =>
-                context.User.Claims.Any(claim =>
-                    claim.Type is "scope" or "scp" &&
-                    claim.Value.Split(' ', StringSplitOptions.RemoveEmptyEntries).Contains(scope)));
-        });
-    });
-}
-else
-{
-    builder.Services.AddAuthorization();
-}
+            using var scope = services.CreateScope();
+            var context = scope.ServiceProvider.GetRequiredService<TimeLensContext>();
+            await context.EnsurePostgresSchemaAsync();
+            await context.EnsureClickHouseSchemaAsync();
+            await scope.ServiceProvider.GetRequiredService<IObjectStorage>().EnsureBucketAsync();
+            return;
+        }
+        catch when (attempt < 12)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(5));
+        }
+    }
 
-var app = builder.Build();
-
-using (var scope = app.Services.CreateScope())
-{
-    await scope.ServiceProvider.GetRequiredService<TimeLensContext>().EnsureClickHouseSchemaAsync();
+    throw new InvalidOperationException("Insert worker dependencies did not become ready.");
 }
-
-if (app.Environment.IsDevelopment())
-{
-    app.MapOpenApi();
-    app.MapScalarApiReference();
-}
-
-if (authEnabled)
-{
-    app.UseAuthentication();
-}
-
-app.UseAuthorization();
-app.MapControllers();
-app.MapHealthChecks("/health");
-var grpc = app.MapGrpcService<IngestionWriteGrpcService>();
-if (authEnabled)
-{
-    grpc.RequireAuthorization("IngestionWrite");
-}
-
-app.Run();

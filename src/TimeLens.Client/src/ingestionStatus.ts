@@ -1,6 +1,6 @@
 export interface IngestionSchedule {
   id: string;
-  seriesId: string;
+  seriesId: number;
   name: string;
   cronExpression: string;
   defaultCronExpression: string;
@@ -21,7 +21,7 @@ export interface IngestionSchedule {
 export interface IngestionJob {
   id: string;
   scheduleId: string;
-  seriesId: string;
+  seriesId: number;
   status: string;
   queuedAt: string;
   startedAt?: string | null;
@@ -33,7 +33,7 @@ export interface IngestionExecution {
   id: string;
   jobId: string;
   scheduleId: string;
-  seriesId: string;
+  seriesId: number;
   status: string;
   createdAt: string;
   startedAt?: string | null;

@@ -175,8 +175,8 @@ public class QualityValidationEngineTests
     private static QualityEvaluationRequest Request(List<TimeSeriesPointDto> points, string end = "2026-01-01T11:00:00Z", TimeSpan? granularity = null) => new(
         new DatasetMetadataDto
         {
-            Id = "dataset-1",
-            SeriesId = "coinbase:btc-usd:15m",
+            SeriesId = 7,
+            ProviderSeriesId = "coinbase:btc-usd:15m",
             Provider = "coinbase-exchange",
             Exchange = "Coinbase",
             Symbol = "BTC-USD",

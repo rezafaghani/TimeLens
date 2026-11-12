@@ -61,16 +61,16 @@ public class DataQualityController(
 
     [HttpGet("jobs")]
     [ProducesResponseType(typeof(List<QualityValidationJobDto>), StatusCodes.Status200OK)]
-    public async Task<IActionResult> Jobs([FromQuery] string? seriesId, CancellationToken cancellationToken)
+    public async Task<IActionResult> Jobs([FromQuery] long? seriesId, CancellationToken cancellationToken)
     {
         var jobs = await qualityRepository.GetJobsAsync(cancellationToken);
-        if (!string.IsNullOrWhiteSpace(seriesId))
+        if (seriesId.HasValue)
         {
             jobs = jobs
                 .Where(job => job.Targets.Any(target =>
                     (target.TargetType.Equals("series", StringComparison.OrdinalIgnoreCase)
                         || target.TargetType.Equals("dataset", StringComparison.OrdinalIgnoreCase))
-                    && target.TargetId.Equals(seriesId, StringComparison.OrdinalIgnoreCase)))
+                    && target.TargetId.Equals(seriesId.Value.ToString(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal)))
                 .ToList();
         }
 
@@ -162,7 +162,7 @@ public class DataQualityController(
     [ProducesResponseType(typeof(List<QualityFindingDto>), StatusCodes.Status200OK)]
     public async Task<IActionResult> Findings(
         [FromQuery] string? datasetId,
-        [FromQuery] string? seriesId,
+        [FromQuery] long? seriesId,
         [FromQuery] bool activeOnly = true,
         CancellationToken cancellationToken = default)
     {
@@ -173,7 +173,7 @@ public class DataQualityController(
     [ProducesResponseType(typeof(List<QualityExecutionDto>), StatusCodes.Status200OK)]
     public async Task<IActionResult> Executions(
         [FromQuery] string? jobId,
-        [FromQuery] string? seriesId,
+        [FromQuery] long? seriesId,
         CancellationToken cancellationToken = default)
     {
         return Ok(await qualityRepository.GetExecutionsAsync(jobId, seriesId, cancellationToken));
@@ -184,12 +184,12 @@ public class DataQualityController(
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Status(
         [FromQuery] string? datasetId,
-        [FromQuery] string? seriesId,
+        [FromQuery] long? seriesId,
         CancellationToken cancellationToken)
     {
         var status = await qualityRepository.GetStatusAsync(datasetId, seriesId, cancellationToken);
         return status is null
-            ? Ok(new QualityStatusDto(datasetId ?? string.Empty, seriesId ?? string.Empty, QualityStatuses.Unknown, JsonSerializer.SerializeToElement(new { }), string.Empty, DateTimeOffset.UtcNow))
+            ? Ok(new QualityStatusDto(datasetId ?? string.Empty, seriesId ?? 0, QualityStatuses.Unknown, JsonSerializer.SerializeToElement(new { }), string.Empty, DateTimeOffset.UtcNow))
             : Ok(status);
     }
 

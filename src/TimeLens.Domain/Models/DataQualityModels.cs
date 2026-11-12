@@ -73,12 +73,12 @@ public record QualitySeriesGroupDto(
 public record QualitySeriesGroupMemberDto(
     string GroupId,
     string DatasetId,
-    string SeriesId,
+    long SeriesId,
     DateTimeOffset CreatedAt);
 
 public record ReplaceQualitySeriesGroupMembersRequest(List<QualitySeriesGroupMemberRequest> Members);
 
-public record QualitySeriesGroupMemberRequest(string DatasetId, string SeriesId);
+public record QualitySeriesGroupMemberRequest(string DatasetId, long SeriesId);
 
 public record UpsertQualitySeriesGroupRequest(
     string? Id,
@@ -156,7 +156,7 @@ public record QualityFindingDto(
     string? TargetExecutionId,
     string? ValidatorExecutionId,
     string DatasetId,
-    string SeriesId,
+    long SeriesId,
     string ValidatorId,
     string Category,
     string Severity,
@@ -178,7 +178,7 @@ public record QualityFindingDto(
 
 public record QualityStatusDto(
     string DatasetId,
-    string SeriesId,
+    long SeriesId,
     string OverallStatus,
     JsonElement CategoryStatuses,
     string LatestExecutionId,

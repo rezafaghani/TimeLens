@@ -102,7 +102,7 @@ describe('ingestion status rows', () => {
 function schedule(id: string): IngestionSchedule {
   return {
     id,
-    seriesId: 'series-1',
+    seriesId: 5,
     name: 'BTC-USD 1m',
     cronExpression: '*/15 * * * *',
     defaultCronExpression: '*/15 * * * *',
@@ -125,7 +125,7 @@ function job(id: string, scheduleId: string, status: string, queuedAt: string): 
   return {
     id,
     scheduleId,
-    seriesId: 'series-1',
+    seriesId: 5,
     status,
     queuedAt,
     error: ''
@@ -137,7 +137,7 @@ function execution(id: string, jobId: string, status: string, createdAt: string,
     id,
     jobId,
     scheduleId,
-    seriesId: 'series-1',
+    seriesId: 5,
     status,
     createdAt,
     inserted: status === 'completed' ? 10 : 0,

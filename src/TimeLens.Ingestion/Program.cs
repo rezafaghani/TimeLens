@@ -1,11 +1,11 @@
 using TimeLens.Ingestion;
 using TimeLens.Ingestion.Services;
-using TimeLens.Contracts;
+using TimeLens.Domain.Models;
 using TimeLens.Domain.Interfaces;
 using TimeLens.Infrastructure;
 using TimeLens.Infrastructure.Repositories;
 using TimeLens.Infrastructure.Observability;
-using Grpc.Net.Client;
+using TimeLens.Infrastructure.Services;
 
 var builder = Host.CreateApplicationBuilder(args);
 builder.AddTimeLensObservability("timelens-ingestion");
@@ -20,6 +20,9 @@ builder.Services.AddSingleton<TimeLensContext>(sp =>
 });
 builder.Services.AddScoped<IIngestionControlRepository, IngestionControlRepository>();
 builder.Services.AddScoped<IDatasetRepository, DatasetRepository>();
+builder.Services.AddSingleton<IngestionArtifactWriter>();
+builder.Services.AddSingleton<IIngestionArtifactPublisher, RabbitMqIngestionArtifactPublisher>();
+builder.Services.AddTimeLensObjectStorage(builder.Configuration);
 builder.Services.AddHttpClient<CoinbaseCandleClient>(client =>
 {
     client.BaseAddress = new Uri(builder.Configuration["Coinbase:BaseUrl"] ?? "https://api.exchange.coinbase.com/");
@@ -36,33 +39,9 @@ builder.Services.AddHttpClient<CoinMetricsClient>(client =>
     client.DefaultRequestHeaders.UserAgent.ParseAdd("TimeLens/1.0");
 });
 builder.Services.AddSingleton<ProviderRateLimiter>();
-builder.Services.AddHttpClient<OAuthTokenProvider>();
 builder.Services.AddSingleton<CoinbaseCandleNormalizer>();
 builder.Services.AddSingleton<EnergyChartsPriceNormalizer>();
 builder.Services.AddSingleton<CoinMetricsNormalizer>();
-builder.Services.AddScoped<IngestionWriteClient>();
-var grpcClientBuilder = builder.Services.AddGrpcClient<IngestionWrite.IngestionWriteClient>(options =>
-{
-    options.Address = new Uri(builder.Configuration["InsertApi:GrpcUrl"] ?? "http://localhost:5103");
-})
-.ConfigureChannel(options =>
-{
-    var grpcUrl = builder.Configuration["InsertApi:GrpcUrl"] ?? "http://localhost:5103";
-    options.UnsafeUseInsecureChannelCallCredentials = grpcUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase);
-});
-
-if (!string.IsNullOrWhiteSpace(builder.Configuration["InsertApi:TokenEndpoint"]))
-{
-    grpcClientBuilder.AddCallCredentials(async (context, metadata, serviceProvider) =>
-    {
-        var tokenProvider = serviceProvider.GetRequiredService<OAuthTokenProvider>();
-        var token = await tokenProvider.GetTokenAsync(context.CancellationToken);
-        if (!string.IsNullOrWhiteSpace(token))
-        {
-            metadata.Add("Authorization", $"Bearer {token}");
-        }
-    });
-}
 builder.UseOrleans(siloBuilder =>
 {
     siloBuilder.UseLocalhostClustering();
@@ -83,6 +62,7 @@ static async Task InitializeAsync(IServiceProvider services)
         {
             using var scope = services.CreateScope();
             await scope.ServiceProvider.GetRequiredService<TimeLensContext>().EnsurePostgresSchemaAsync();
+            await scope.ServiceProvider.GetRequiredService<IObjectStorage>().EnsureBucketAsync();
             return;
         }
         catch when (attempt < 12)

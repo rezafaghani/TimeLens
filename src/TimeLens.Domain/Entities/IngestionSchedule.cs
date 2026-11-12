@@ -4,7 +4,7 @@ public class IngestionSchedule
 {
     public string Id { get; set; } = string.Empty;
 
-    public string SeriesId { get; set; } = string.Empty;
+    public long SeriesId { get; set; }
     public string Name { get; set; } = string.Empty;
     public string CronExpression { get; set; } = string.Empty;
     public string DefaultCronExpression { get; set; } = string.Empty;

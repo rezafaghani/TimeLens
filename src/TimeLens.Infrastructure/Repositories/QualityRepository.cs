@@ -217,12 +217,12 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
         return (await ReadJobs(reader, cancellationToken)).SingleOrDefault();
     }
 
-    public async Task<List<QualityExecutionDto>> GetExecutionsAsync(string? jobId, string? seriesId, CancellationToken cancellationToken = default)
+    public async Task<List<QualityExecutionDto>> GetExecutionsAsync(string? jobId, long? seriesId, CancellationToken cancellationToken = default)
     {
         await using var command = context.Postgres.CreateCommand();
         var clauses = new List<string>();
         AddFilter(command, clauses, "e.job_id", "job_id", jobId);
-        if (!string.IsNullOrWhiteSpace(seriesId))
+        if (seriesId.HasValue)
         {
             clauses.Add("""
                 EXISTS (
@@ -231,7 +231,7 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
                     WHERE t.execution_id = e.id AND t.series_id = @series_id
                 )
                 """);
-            command.Parameters.AddWithValue("series_id", seriesId);
+            command.Parameters.AddWithValue("series_id", seriesId.Value);
         }
 
         command.CommandText = $"""
@@ -349,12 +349,12 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
-    public async Task<List<QualityFindingDto>> GetFindingsAsync(string? datasetId, string? seriesId, bool activeOnly, CancellationToken cancellationToken = default)
+    public async Task<List<QualityFindingDto>> GetFindingsAsync(string? datasetId, long? seriesId, bool activeOnly, CancellationToken cancellationToken = default)
     {
         await using var command = context.Postgres.CreateCommand();
         var clauses = new List<string>();
         AddFilter(command, clauses, "dataset_id", datasetId);
-        AddFilter(command, clauses, "series_id", seriesId);
+        AddSeriesFilter(command, clauses, seriesId);
         if (activeOnly)
         {
             clauses.Add("active = true");
@@ -381,12 +381,12 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
         return result;
     }
 
-    public async Task<QualityStatusDto?> GetStatusAsync(string? datasetId, string? seriesId, CancellationToken cancellationToken = default)
+    public async Task<QualityStatusDto?> GetStatusAsync(string? datasetId, long? seriesId, CancellationToken cancellationToken = default)
     {
         await using var command = context.Postgres.CreateCommand();
         var clauses = new List<string>();
         AddFilter(command, clauses, "dataset_id", datasetId);
-        AddFilter(command, clauses, "series_id", seriesId);
+        AddSeriesFilter(command, clauses, seriesId);
 
         command.CommandText = $"""
             SELECT dataset_id, series_id, overall_status, category_statuses::text, latest_execution_id, as_of
@@ -398,7 +398,7 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
 
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         return await reader.ReadAsync(cancellationToken)
-            ? new QualityStatusDto(reader.GetString(0), reader.GetString(1), reader.GetString(2), Json(reader.GetString(3)), reader.GetString(4), reader.GetFieldValue<DateTimeOffset>(5))
+            ? new QualityStatusDto(reader.GetString(0), reader.GetInt64(1), reader.GetString(2), Json(reader.GetString(3)), reader.GetString(4), reader.GetFieldValue<DateTimeOffset>(5))
             : null;
     }
 
@@ -463,7 +463,7 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
             command.Parameters.AddWithValue("evaluated_start", result.Start);
             command.Parameters.AddWithValue("evaluated_end", result.End);
             AddJson(command, "config_snapshot", JsonSerializer.SerializeToElement(new { trigger = "manual" }, JsonOptions));
-            AddJson(command, "target_snapshot", JsonSerializer.SerializeToElement(new[] { result.Metadata.Id }, JsonOptions));
+            AddJson(command, "target_snapshot", JsonSerializer.SerializeToElement(new[] { result.Metadata.SeriesId }, JsonOptions));
             command.Parameters.AddWithValue("warning_count", result.Findings.Count(x => x.Severity == "warning"));
             command.Parameters.AddWithValue("critical_count", result.Findings.Count(x => x.Severity == "critical"));
             await command.ExecuteNonQueryAsync(cancellationToken);
@@ -482,7 +482,7 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
                 """;
             command.Parameters.AddWithValue("id", targetExecutionId);
             command.Parameters.AddWithValue("execution_id", executionId);
-            command.Parameters.AddWithValue("dataset_id", result.Metadata.Id);
+            command.Parameters.AddWithValue("dataset_id", result.Metadata.SeriesId.ToString(System.Globalization.CultureInfo.InvariantCulture));
             command.Parameters.AddWithValue("series_id", result.Metadata.SeriesId);
             command.Parameters.AddWithValue("status", result.OverallStatus);
             command.Parameters.AddWithValue("now", now);
@@ -506,7 +506,7 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
                 VALUES (
                     @dataset_id, @series_id, @overall_status, @category_statuses, @latest_execution_id, @as_of)
                 """;
-            command.Parameters.AddWithValue("dataset_id", result.Metadata.Id);
+            command.Parameters.AddWithValue("dataset_id", result.Metadata.SeriesId.ToString(System.Globalization.CultureInfo.InvariantCulture));
             command.Parameters.AddWithValue("series_id", result.Metadata.SeriesId);
             command.Parameters.AddWithValue("overall_status", result.OverallStatus);
             AddJson(command, "category_statuses", JsonSerializer.SerializeToElement(CategoryStatuses(result.Findings), JsonOptions));
@@ -580,7 +580,7 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
         DateTimeOffset now,
         CancellationToken cancellationToken)
     {
-        var fingerprint = $"{metadata.Id}:{finding.ValidatorId}:{finding.AffectedStart:O}:{finding.AffectedEnd:O}";
+        var fingerprint = $"{metadata.SeriesId}:{finding.ValidatorId}:{finding.AffectedStart:O}:{finding.AffectedEnd:O}";
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """
@@ -598,7 +598,7 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
         command.Parameters.AddWithValue("id", $"quality-finding-{Guid.NewGuid():N}");
         command.Parameters.AddWithValue("execution_id", executionId);
         command.Parameters.AddWithValue("target_execution_id", targetExecutionId);
-        command.Parameters.AddWithValue("dataset_id", metadata.Id);
+        command.Parameters.AddWithValue("dataset_id", metadata.SeriesId.ToString(System.Globalization.CultureInfo.InvariantCulture));
         command.Parameters.AddWithValue("series_id", metadata.SeriesId);
         command.Parameters.AddWithValue("validator_id", finding.ValidatorId);
         command.Parameters.AddWithValue("category", finding.Category);
@@ -696,7 +696,7 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
     private static QualitySeriesGroupMemberDto ReadGroupMember(NpgsqlDataReader reader) => new(
         reader.GetString(0),
         reader.GetString(1),
-        reader.GetString(2),
+        reader.GetInt64(2),
         reader.GetFieldValue<DateTimeOffset>(3));
 
     private static QualityFindingDto ReadFinding(NpgsqlDataReader reader) => new(
@@ -705,7 +705,7 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
         reader.IsDBNull(2) ? null : reader.GetString(2),
         reader.IsDBNull(3) ? null : reader.GetString(3),
         reader.GetString(4),
-        reader.GetString(5),
+        reader.GetInt64(5),
         reader.GetString(6),
         reader.GetString(7),
         reader.GetString(8),
@@ -734,6 +734,17 @@ public class QualityRepository(TimeLensContext context) : IQualityRepository
 
         clauses.Add($"{column} = @{column}");
         command.Parameters.AddWithValue(column, value);
+    }
+
+    private static void AddSeriesFilter(NpgsqlCommand command, List<string> clauses, long? seriesId)
+    {
+        if (!seriesId.HasValue)
+        {
+            return;
+        }
+
+        clauses.Add("series_id = @series_id");
+        command.Parameters.AddWithValue("series_id", seriesId.Value);
     }
 
     private static void AddFilter(NpgsqlCommand command, List<string> clauses, string column, string parameter, string? value)

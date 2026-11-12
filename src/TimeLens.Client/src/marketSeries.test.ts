@@ -22,9 +22,11 @@ describe('groupSeriesByInstrument', () => {
 
 function series(symbol: string, timeframe: string, lastIngestedAt: string) {
   const [baseAsset, quoteAsset] = symbol.split('-');
+  const seriesId = symbol === 'BTC-USD' ? (timeframe === '1m' ? 5 : 8) : 10;
   return {
-    id: `coinbase:${symbol}:${timeframe}`,
-    seriesId: `coinbase:${symbol}:${timeframe}`.toLowerCase(),
+    seriesId,
+    definitionId: `coinbase:${symbol}:${timeframe}`,
+    providerSeriesId: `coinbase:${symbol}:${timeframe}`.toLowerCase(),
     provider: 'coinbase-exchange',
     exchange: 'Coinbase',
     symbol,

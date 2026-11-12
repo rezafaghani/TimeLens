@@ -12,7 +12,7 @@ namespace TimeLens.Ingestion.Grains;
 public class CoinbaseCandleGrain(
     CoinbaseCandleClient coinbaseClient,
     CoinbaseCandleNormalizer normalizer,
-    IngestionWriteClient insertClient,
+    IngestionArtifactWriter artifactWriter,
     IServiceScopeFactory scopeFactory,
     IOptions<IngestionOptions> options,
     ILogger<CoinbaseCandleGrain> logger) : Grain, ICoinbaseCandleGrain
@@ -32,9 +32,6 @@ public class CoinbaseCandleGrain(
         var runningRepository = runningScope.ServiceProvider.GetRequiredService<IIngestionControlRepository>();
         await runningRepository.MarkJobRunningAsync(message.JobId, message.ExecutionId, cancellationToken);
 
-        var inserted = 0;
-        var skipped = 0;
-
         try
         {
             var productId = Get(message.Parameters, "product_id");
@@ -50,8 +47,10 @@ public class CoinbaseCandleGrain(
                 throw new ArgumentException("A valid half-open ingestion window is required.");
             }
 
-            foreach (var (chunkStart, chunkEnd) in Chunks(start, end, granularity))
+            var chunks = Chunks(start, end, granularity).ToArray();
+            for (var chunkIndex = 0; chunkIndex < chunks.Length; chunkIndex++)
             {
+                var (chunkStart, chunkEnd) = chunks[chunkIndex];
                 var definition = new MarketDataRequestDefinition
                 {
                     Endpoint = message.Endpoint,
@@ -68,8 +67,10 @@ public class CoinbaseCandleGrain(
                 providerActivity?.SetTag("market.provider", message.Source);
                 providerActivity?.SetTag("market.symbol", productId);
                 providerActivity?.SetTag("market.timeframe", timeframe);
-                using var document = await coinbaseClient.GetAsync(productId, granularity, chunkStart, chunkEnd, cancellationToken);
+                var response = await coinbaseClient.GetAsync(productId, granularity, chunkStart, chunkEnd, cancellationToken);
                 TimeLensTelemetry.ProviderRequestDuration.Record(Stopwatch.GetElapsedTime(providerStarted).TotalSeconds, KeyValuePair.Create<string, object?>("market.provider", message.Source));
+                var rawArtifact = await artifactWriter.SaveRawAsync(message, response.RawJson, chunks.Length, cancellationToken);
+                using var document = response.Parse();
                 NormalizedDataset dataset;
                 using (TimeLensTelemetry.ActivitySource.StartActivity("NormalizeMarketData"))
                 {
@@ -80,41 +81,26 @@ public class CoinbaseCandleGrain(
                 using var metadataScope = scopeFactory.CreateScope();
                 var metadataRepository = metadataScope.ServiceProvider.GetRequiredService<IDatasetRepository>();
                 var saved = await metadataRepository.UpsertAsync(dataset.Metadata, cancellationToken);
-                dataset.Batch.DatasetId = saved.Id;
                 dataset.Batch.SourceMetadataVersion = saved.LastIngestedAt.ToUnixTimeSeconds().ToString();
 
-                foreach (var chunk in dataset.Batch.Points.Chunk(Math.Max(message.BatchSize > 0 ? message.BatchSize : options.Value.BatchSize, 1)))
-                {
-                    var batch = new TimeSeriesBatchRequest
-                    {
-                        DatasetId = dataset.Batch.DatasetId,
-                        SourceMetadataVersion = dataset.Batch.SourceMetadataVersion,
-                        Points = chunk.ToList()
-                    };
-                    TimeSeriesInsertResult result;
-                    using (TimeLensTelemetry.ActivitySource.StartActivity("PersistMarketData"))
-                    {
-                        result = await insertClient.InsertBatchAsync(batch, cancellationToken);
-                    }
-                    inserted += result.Inserted;
-                    skipped += result.Skipped;
-                    logger.LogInformation(
-                        "Inserted {Inserted}, skipped {Skipped} for {Provider} {SeriesId} {Timeframe}.",
-                        result.Inserted,
-                        result.Skipped,
-                        saved.Provider,
-                        saved.SeriesId,
-                        saved.Timeframe);
-                }
+                await artifactWriter.SaveParsedAndPublishAsync(
+                    rawArtifact,
+                    saved.SeriesId,
+                    dataset.Batch.SourceMetadataVersion,
+                    dataset.Batch.Points,
+                    cancellationToken);
+                logger.LogInformation(
+                    "Archived and queued {PointCount} points for {Provider} {SeriesId} {Timeframe}.",
+                    dataset.Batch.Points.Count,
+                    saved.Provider,
+                    saved.SeriesId,
+                    saved.Timeframe);
             }
 
             using var completedScope = scopeFactory.CreateScope();
             var completedRepository = completedScope.ServiceProvider.GetRequiredService<IIngestionControlRepository>();
-            await completedRepository.MarkJobCompletedAsync(message.JobId, message.ExecutionId, inserted, skipped, cancellationToken);
-            activity?.SetTag("timelens.records_inserted", inserted);
-            activity?.SetTag("timelens.records_skipped", skipped);
+            await completedRepository.MarkJobArtifactsQueuedAsync(message.JobId, message.ExecutionId, chunks.Length, cancellationToken);
             TimeLensTelemetry.IngestionExecutions.Add(1, KeyValuePair.Create<string, object?>("market.provider", message.Source));
-            TimeLensTelemetry.RecordsIngested.Add(inserted, KeyValuePair.Create<string, object?>("market.provider", message.Source));
             TimeLensTelemetry.IngestionDuration.Record(Stopwatch.GetElapsedTime(started).TotalSeconds, KeyValuePair.Create<string, object?>("market.provider", message.Source));
         }
         catch (Exception ex)

@@ -207,7 +207,10 @@ public class ValidationJobConsumer(
             else if (target.TargetType == "group")
             {
                 var members = await qualityRepository.GetSeriesGroupMembersAsync(target.TargetId, cancellationToken);
-                targets.AddRange(members.Select(x => new QualityValidationJobTargetDto("series", x.SeriesId, target.Rule)));
+                targets.AddRange(members.Select(x => new QualityValidationJobTargetDto(
+                    "series",
+                    x.SeriesId.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    target.Rule)));
             }
         }
 

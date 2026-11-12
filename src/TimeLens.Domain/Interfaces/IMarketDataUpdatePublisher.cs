@@ -4,5 +4,10 @@ namespace TimeLens.Domain.Interfaces;
 
 public interface IMarketDataUpdatePublisher
 {
-    Task PublishAsync(string datasetId, TimeSeriesWritePoint point, DateTimeOffset asOf, string operation, CancellationToken cancellationToken = default);
+    Task PublishBatchAsync(
+        long seriesId,
+        IReadOnlyList<TimeSeriesWritePoint> points,
+        DateTimeOffset asOf,
+        string operation,
+        CancellationToken cancellationToken = default);
 }

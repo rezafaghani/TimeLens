@@ -1,3 +1,4 @@
+using ClickHouse.Client.Copy;
 using TimeLens.Domain.Interfaces;
 using TimeLens.Domain.Models;
 using TimeLens.Domain.Observability;
@@ -14,18 +15,30 @@ public class TimeSeriesRepository(TimeLensContext context, IMarketDataUpdatePubl
         activity?.SetTag("db.system.name", "clickhouse");
         activity?.SetTag("db.operation.name", "insert");
         activity?.SetTag("db.collection.name", BarsTable);
-        activity?.SetTag("timelens.dataset_id", request.DatasetId);
+        activity?.SetTag("timelens.series_id", request.SeriesId);
         activity?.SetTag("timelens.record_count", request.Points.Count);
         var insertTime = DateTimeOffset.UtcNow;
         var result = new TimeSeriesInsertResult { AsOf = insertTime };
+        var points = request.Points.OrderBy(point => point.Timestamp).ToArray();
+        if (points.Length == 0)
+        {
+            return result;
+        }
 
         await using var connection = context.CreateClickHouseConnection();
         await connection.OpenAsync(cancellationToken);
 
-        foreach (var point in request.Points.OrderBy(x => x.Timestamp))
+        var latestByTimestamp = await GetLatestAsync(
+            connection,
+            request.SeriesId,
+            points[0].Timestamp,
+            points[^1].Timestamp,
+            cancellationToken);
+        var pointsToInsert = new List<TimeSeriesWritePoint>(points.Length);
+        foreach (var point in points)
         {
-            var latest = await GetLatestAsync(connection, request.DatasetId, point.Timestamp, cancellationToken);
-            if (latest is not null
+            var timestampKey = GetTimestampKey(point.Timestamp);
+            if (latestByTimestamp.TryGetValue(timestampKey, out var latest)
                 && latest.Open == point.Open
                 && latest.High == point.High
                 && latest.Low == point.Low
@@ -36,32 +49,55 @@ public class TimeSeriesRepository(TimeLensContext context, IMarketDataUpdatePubl
                 continue;
             }
 
-            await using var command = connection.CreateCommand();
-            command.CommandText = $$"""
-                INSERT INTO {{BarsTable}} (
-                    series_id, timestamp, open, high, low, close, volume,
-                    as_of, inserted_at, source_metadata_version)
-                VALUES (
-                    {seriesId:String}, {timestamp:DateTime64(3)}, {open:Float64}, {high:Float64},
-                    {low:Float64}, {close:Float64}, {volume:Float64},
-                    {asOf:DateTime64(3)}, {insertedAt:DateTime64(3)}, {sourceMetadataVersion:String})
-                """;
-            command.AddParameter("seriesId", request.DatasetId);
-            command.AddParameter("timestamp", DbValue.Utc(point.Timestamp));
-            command.AddParameter("open", point.Open);
-            command.AddParameter("high", point.High);
-            command.AddParameter("low", point.Low);
-            command.AddParameter("close", point.Close);
-            command.AddParameter("volume", point.Volume);
-            command.AddParameter("asOf", DbValue.Utc(insertTime));
-            command.AddParameter("insertedAt", DbValue.Utc(insertTime));
-            command.AddParameter("sourceMetadataVersion", request.SourceMetadataVersion);
-            await command.ExecuteNonQueryAsync(cancellationToken);
+            pointsToInsert.Add(point);
+            latestByTimestamp[timestampKey] = point;
+        }
 
-            result.Inserted++;
+        if (pointsToInsert.Count > 0)
+        {
+            using var bulkCopy = new ClickHouseBulkCopy(connection)
+            {
+                DestinationTableName = $"{connection.Database}.{BarsTable}",
+                ColumnNames =
+                [
+                    "series_id",
+                    "timestamp",
+                    "open",
+                    "high",
+                    "low",
+                    "close",
+                    "volume",
+                    "as_of",
+                    "inserted_at",
+                    "source_metadata_version"
+                ],
+                BatchSize = 10_000,
+                MaxDegreeOfParallelism = 1
+            };
+            await bulkCopy.InitAsync();
+            await bulkCopy.WriteToServerAsync(pointsToInsert.Select(point => new object[]
+            {
+                request.SeriesId,
+                DbValue.Utc(point.Timestamp),
+                point.Open,
+                point.High,
+                point.Low,
+                point.Close,
+                point.Volume,
+                DbValue.Utc(insertTime),
+                DbValue.Utc(insertTime),
+                request.SourceMetadataVersion
+            }));
+
+            result.Inserted = pointsToInsert.Count;
             if (marketDataUpdatePublisher is not null)
             {
-                await marketDataUpdatePublisher.PublishAsync(request.DatasetId, point, insertTime, "upsert", cancellationToken);
+                await marketDataUpdatePublisher.PublishBatchAsync(
+                    request.SeriesId,
+                    pointsToInsert,
+                    insertTime,
+                    "upsert",
+                    cancellationToken);
             }
         }
 
@@ -71,7 +107,7 @@ public class TimeSeriesRepository(TimeLensContext context, IMarketDataUpdatePubl
     }
 
     public async Task<List<TimeSeriesPointDto>> GetSeriesAsync(
-        string datasetId,
+        long seriesId,
         DateTimeOffset start,
         DateTimeOffset end,
         DateTimeOffset? asOf,
@@ -82,7 +118,7 @@ public class TimeSeriesRepository(TimeLensContext context, IMarketDataUpdatePubl
         activity?.SetTag("db.system.name", "clickhouse");
         activity?.SetTag("db.operation.name", "select");
         activity?.SetTag("db.collection.name", BarsTable);
-        activity?.SetTag("timelens.dataset_id", datasetId);
+        activity?.SetTag("timelens.series_id", seriesId);
         await using var connection = context.CreateClickHouseConnection();
         await connection.OpenAsync(cancellationToken);
         await using var command = connection.CreateCommand();
@@ -99,7 +135,7 @@ public class TimeSeriesRepository(TimeLensContext context, IMarketDataUpdatePubl
                     as_of,
                     row_number() OVER (PARTITION BY series_id, timestamp ORDER BY as_of DESC, inserted_at DESC) AS rn
                 FROM {{BarsTable}}
-                WHERE series_id = {seriesId:String}
+                WHERE series_id = {seriesId:Int64}
                   AND timestamp >= {start:DateTime64(3)}
                   AND timestamp < {end:DateTime64(3)}
                   {{(asOf.HasValue ? "AND as_of <= {asOf:DateTime64(3)}" : "")}}
@@ -108,7 +144,7 @@ public class TimeSeriesRepository(TimeLensContext context, IMarketDataUpdatePubl
             ORDER BY timestamp
             {{(limit.HasValue ? "LIMIT {limit:Int32}" : "")}}
             """;
-        command.AddParameter("seriesId", datasetId);
+        command.AddParameter("seriesId", seriesId);
         command.AddParameter("start", DbValue.Utc(start));
         command.AddParameter("end", DbValue.Utc(end));
         if (asOf.HasValue)
@@ -139,30 +175,45 @@ public class TimeSeriesRepository(TimeLensContext context, IMarketDataUpdatePubl
         return result;
     }
 
-    private static async Task<TimeSeriesWritePoint?> GetLatestAsync(System.Data.Common.DbConnection connection, string seriesId, DateTimeOffset timestamp, CancellationToken cancellationToken)
+    private static async Task<Dictionary<long, TimeSeriesWritePoint>> GetLatestAsync(
+        System.Data.Common.DbConnection connection,
+        long seriesId,
+        DateTimeOffset start,
+        DateTimeOffset end,
+        CancellationToken cancellationToken)
     {
+        var result = new Dictionary<long, TimeSeriesWritePoint>();
         await using var command = connection.CreateCommand();
         command.CommandText = $$"""
-            SELECT open, high, low, close, volume
+            SELECT timestamp, open, high, low, close, volume
             FROM {{BarsTable}}
-            WHERE series_id = {seriesId:String} AND timestamp = {timestamp:DateTime64(3)}
-            ORDER BY as_of DESC, inserted_at DESC
-            LIMIT 1
+            WHERE series_id = {seriesId:Int64}
+              AND timestamp >= {start:DateTime64(3)}
+              AND timestamp <= {end:DateTime64(3)}
+            ORDER BY timestamp, as_of DESC, inserted_at DESC
+            LIMIT 1 BY timestamp
             """;
         command.AddParameter("seriesId", seriesId);
-        command.AddParameter("timestamp", DbValue.Utc(timestamp));
+        command.AddParameter("start", DbValue.Utc(start));
+        command.AddParameter("end", DbValue.Utc(end));
 
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        return await reader.ReadAsync(cancellationToken)
-            ? new TimeSeriesWritePoint
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var timestamp = new DateTimeOffset(reader.GetDateTime(0), TimeSpan.Zero);
+            result[GetTimestampKey(timestamp)] = new TimeSeriesWritePoint
             {
                 Timestamp = timestamp,
-                Open = reader.GetDouble(0),
-                High = reader.GetDouble(1),
-                Low = reader.GetDouble(2),
-                Close = reader.GetDouble(3),
-                Volume = reader.GetDouble(4)
-            }
-            : null;
+                Open = reader.GetDouble(1),
+                High = reader.GetDouble(2),
+                Low = reader.GetDouble(3),
+                Close = reader.GetDouble(4),
+                Volume = reader.GetDouble(5)
+            };
+        }
+
+        return result;
     }
+
+    private static long GetTimestampKey(DateTimeOffset timestamp) => timestamp.ToUnixTimeMilliseconds();
 }
