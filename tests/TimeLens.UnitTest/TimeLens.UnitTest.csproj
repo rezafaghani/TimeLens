@@ -28,6 +28,7 @@
     <ProjectReference Include="..\..\src\TimeLens.Insert\TimeLens.Insert.csproj" />
     <ProjectReference Include="..\..\src\TimeLens.Infrastructure\TimeLens.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\TimeLens.Ingestion\TimeLens.Ingestion.csproj" />
+    <ProjectReference Include="..\..\src\TimeLens.Scheduler\TimeLens.Scheduler.csproj" />
     <ProjectReference Include="..\..\src\TimeLens.Validation\TimeLens.Validation.csproj" />
   </ItemGroup>
 

@@ -30,7 +30,10 @@ public class Worker(
         var repository = scope.ServiceProvider.GetRequiredService<IIngestionControlRepository>();
         var now = DateTimeOffset.UtcNow;
 
-        foreach (var schedule in await repository.GetEnabledSchedulesAsync(cancellationToken))
+        var schedules = await repository.GetEnabledSchedulesAsync(cancellationToken);
+        await EnsureAutomaticValidationJobsAsync(scope.ServiceProvider, schedules, cancellationToken);
+
+        foreach (var schedule in schedules)
         {
             try
             {
@@ -113,12 +116,15 @@ public class Worker(
     private async Task QueueDueQualityJobsAsync(IServiceProvider services, DateTimeOffset now, CancellationToken cancellationToken)
     {
         var repository = services.GetRequiredService<IQualityRepository>();
+        var ingestionRepository = services.GetRequiredService<IIngestionControlRepository>();
 
         foreach (var job in await repository.GetEnabledJobsAsync(cancellationToken))
         {
             try
             {
-                if (!IsDue(job, now))
+                var hasInitialData = job.LastQueuedAt is null
+                    && await HasIngestedDataAsync(job, ingestionRepository, cancellationToken);
+                if (!hasInitialData && !IsDue(job, now))
                 {
                     continue;
                 }
@@ -127,7 +133,7 @@ public class Worker(
                 {
                     JobId = job.Id,
                     ExecutionId = $"quality-execution-{Guid.NewGuid():N}",
-                    TriggerType = "scheduled",
+                    TriggerType = hasInitialData ? "first_data" : "scheduled",
                     WindowStartExpression = job.WindowStartExpression,
                     WindowEndExpression = job.WindowEndExpression
                 };
@@ -140,6 +146,48 @@ public class Worker(
                 logger.LogError(ex, "Failed to queue validation job {JobId}.", job.Id);
             }
         }
+    }
+
+    private async Task EnsureAutomaticValidationJobsAsync(
+        IServiceProvider services,
+        IEnumerable<TimeLens.Domain.Entities.IngestionSchedule> schedules,
+        CancellationToken cancellationToken)
+    {
+        var repository = services.GetRequiredService<IQualityRepository>();
+        foreach (var schedule in schedules)
+        {
+            try
+            {
+                var request = DefaultQualityValidationJobs.Create(schedule);
+                if (await repository.GetJobAsync(request.Id!, cancellationToken) is null)
+                {
+                    await repository.UpsertJobAsync(request, cancellationToken);
+                    logger.LogInformation("Created automatic validation for series {SeriesId}.", schedule.SeriesId);
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Failed to configure automatic validation for series {SeriesId}.", schedule.SeriesId);
+            }
+        }
+    }
+
+    private static async Task<bool> HasIngestedDataAsync(
+        QualityValidationJobDto job,
+        IIngestionControlRepository ingestionRepository,
+        CancellationToken cancellationToken)
+    {
+        foreach (var target in job.Targets.Where(target =>
+                     target.TargetType.Equals("series", StringComparison.OrdinalIgnoreCase)))
+        {
+            var executions = await ingestionRepository.GetExecutionsAsync(null, null, target.TargetId, cancellationToken);
+            if (DefaultQualityValidationJobs.HasIngestedData(executions))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static bool IsDue(ExecutionDefinitionDto definition, DateTimeOffset now)

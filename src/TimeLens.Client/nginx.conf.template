@@ -1,7 +1,7 @@
 server {
   listen 80;
   server_name _;
-  resolver 10.89.1.1 valid=10s ipv6=off;
+  resolver ${NGINX_LOCAL_RESOLVERS} valid=10s ipv6=off;
 
   root /usr/share/nginx/html;
   index index.html;

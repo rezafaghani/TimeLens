@@ -314,6 +314,74 @@ public class IngestionControlRepository(TimeLensContext context) : IIngestionCon
         };
     }
 
+    public async Task<IngestionJobMessage?> TryCreateBackloadJobAsync(
+        IngestionSchedule schedule,
+        string endpoint,
+        string source,
+        Dictionary<string, string> parameters,
+        string windowStartExpression,
+        string windowEndExpression,
+        int batchSize,
+        string jobId,
+        DateTimeOffset queuedAt,
+        CancellationToken cancellationToken = default)
+    {
+        var executionId = $"{jobId}-execution";
+        await using var connection = await context.Postgres.OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+
+        await using (var command = connection.CreateCommand())
+        {
+            command.Transaction = transaction;
+            command.CommandText = """
+                INSERT INTO ingestion_jobs (id, schedule_id, series_id, status, queued_at, started_at, finished_at, error)
+                VALUES (@id, @schedule_id, @series_id, @status, @queued_at, NULL, NULL, '')
+                ON CONFLICT (id) DO NOTHING
+                """;
+            command.Parameters.AddWithValue("id", jobId);
+            command.Parameters.AddWithValue("schedule_id", schedule.Id);
+            command.Parameters.AddWithValue("series_id", schedule.SeriesId);
+            command.Parameters.AddWithValue("status", IngestionStatuses.Queued);
+            command.Parameters.AddWithValue("queued_at", queuedAt);
+            if (await command.ExecuteNonQueryAsync(cancellationToken) == 0)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                var existing = await GetJobsAsync(schedule.Id, schedule.SeriesId, cancellationToken);
+                return existing.Any(job => job.Id == jobId && job.Status == IngestionStatuses.Queued)
+                    ? CreateBackloadMessage()
+                    : null;
+            }
+        }
+
+        var execution = new IngestionExecution
+        {
+            Id = executionId,
+            JobId = jobId,
+            ScheduleId = schedule.Id,
+            SeriesId = schedule.SeriesId,
+            Status = IngestionStatuses.Queued,
+            CreatedAt = queuedAt
+        };
+        await InsertExecutionAsync(connection, transaction, execution, cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return CreateBackloadMessage();
+
+        IngestionJobMessage CreateBackloadMessage() => new()
+        {
+            ScheduleId = schedule.Id,
+            JobId = jobId,
+            ExecutionId = executionId,
+            SeriesId = schedule.SeriesId,
+            Source = source,
+            Endpoint = endpoint,
+            Parameters = parameters,
+            LookbackHours = schedule.LookbackHours,
+            WindowStartExpression = windowStartExpression,
+            WindowEndExpression = windowEndExpression,
+            BatchSize = batchSize
+        };
+    }
+
     public async Task MarkJobRunningAsync(string jobId, string executionId, CancellationToken cancellationToken = default)
     {
         var now = DateTimeOffset.UtcNow;
